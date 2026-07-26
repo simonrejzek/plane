@@ -1,4 +1,6 @@
 # Third party imports
+import os
+
 from celery import shared_task
 from opentelemetry import trace
 
@@ -25,6 +27,9 @@ from plane.utils.telemetry import init_tracer, shutdown_tracer
 @shared_task
 def instance_traces():
     try:
+        if os.environ.get("CONTRACT_LICENSE_ENABLED", "0") == "1":
+            return
+
         init_tracer()
         # Check if the instance is registered
         instance = Instance.objects.first()

@@ -26,6 +26,7 @@ from plane.payment.utils.workspace_license_request import (
     is_on_trial,
 )
 from plane.payment.rate_limit import WorkspaceRateThrottle
+from plane.payment.contract_license import is_contract_license_enabled
 
 
 class ProductEndpoint(BaseAPIView):
@@ -39,6 +40,9 @@ class ProductEndpoint(BaseAPIView):
 
     def get(self, request, slug):
         try:
+            if is_contract_license_enabled():
+                return Response([], status=status.HTTP_200_OK)
+
             if settings.PAYMENT_SERVER_BASE_URL:
                 # Get all the paid users in the workspace
                 paid_count = WorkspaceMember.objects.filter(
@@ -170,7 +174,7 @@ class WorkspaceProductEndpoint(BaseAPIView):
 
     def get(self, request, slug):
         try:
-            if settings.PAYMENT_SERVER_BASE_URL:
+            if settings.PAYMENT_SERVER_BASE_URL or is_contract_license_enabled():
                 # Resync the workspace license
                 response = resync_workspace_license(workspace_slug=slug)
                 return Response(response, status=status.HTTP_200_OK)
@@ -204,6 +208,10 @@ class WorkspaceLicenseRefreshEndpoint(BaseAPIView):
         )
 
     def post(self, request, slug):
+        if is_contract_license_enabled():
+            _ = resync_workspace_license(workspace_slug=slug, force=True)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
         # On the multi-tenant version, the workspace license is synced from the payment server
         if settings.IS_MULTI_TENANT:
             # Resync the workspace license

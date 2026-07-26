@@ -11,6 +11,10 @@ from openfeature.flag_evaluation import FlagResolutionDetails
 
 # Module imports
 from plane.utils.exception_logger import log_exception
+from plane.payment.contract_license import (
+    BUSINESS_FEATURE_FLAGS,
+    is_contract_license_enabled,
+)
 
 
 class FlagProvider(AbstractProvider):
@@ -18,6 +22,9 @@ class FlagProvider(AbstractProvider):
         return Metadata(name="PlaneProvider")
 
     def make_request(self, slug, user_id, feature_key, default_value):
+        if is_contract_license_enabled():
+            return BUSINESS_FEATURE_FLAGS.get(feature_key, default_value)
+
         # Make a request to the feature flag server to get the value of the feature flag
         if settings.FEATURE_FLAG_SERVER_BASE_URL:
             try:

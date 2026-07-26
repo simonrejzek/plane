@@ -10,9 +10,16 @@ from django.db.models import F
 # Module imports
 from plane.db.models import Workspace, WorkspaceMember, WorkspaceMemberInvite
 from plane.ee.models import WorkspaceLicense
+from plane.payment.contract_license import (
+    get_contract_workspace_license,
+    is_contract_license_enabled,
+)
 
 
 def fetch_workspace_license(workspace_id, workspace_slug, free_seats=12):
+    if is_contract_license_enabled():
+        return get_contract_workspace_license()
+
     # If the number of free seats is less than 12, set it to 12
     workspace_free_seats = 12 if free_seats <= 12 else free_seats
     owner_email = Workspace.objects.get(slug=workspace_slug).owner.email

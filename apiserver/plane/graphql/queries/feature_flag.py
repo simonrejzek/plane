@@ -16,11 +16,18 @@ from strawberry.permission import PermissionExtension
 # Module Imports
 from plane.graphql.types.feature_flag import FeatureFlagType
 from plane.graphql.permissions.workspace import WorkspaceBasePermission
+from plane.payment.contract_license import (
+    get_contract_feature_flags,
+    is_contract_license_enabled,
+)
 
 
 # fetching the version check query
 @sync_to_async
 def fetch_feature_flags(slug: str, user_id: strawberry.ID):
+    if is_contract_license_enabled():
+        return get_contract_feature_flags().values()
+
     url = f"{settings.FEATURE_FLAG_SERVER_BASE_URL}/api/feature-flags/"
     json = {"workspace_slug": slug, "user_id": str(user_id)}
     headers = {

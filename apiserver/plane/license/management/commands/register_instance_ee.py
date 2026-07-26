@@ -57,6 +57,9 @@ class Command(BaseCommand):
         prime_host = os.environ.get("PRIME_HOST", False)
         domain = os.environ.get("APP_DOMAIN", False)
         instance_id = os.environ.get("INSTANCE_ID", False)
+        contract_license_enabled = (
+            os.environ.get("CONTRACT_LICENSE_ENABLED", "0") == "1"
+        )
         # Get the machine signature from the options
         machine_signature = options.get(
             "machine_signature", "machine-signature"
@@ -80,7 +83,11 @@ class Command(BaseCommand):
 
             # Make a call to the Prime Server to get the instance
             instance = Instance.objects.create(
-                instance_name="Plane Commercial Edition",
+                instance_name=(
+                    "Plane Business"
+                    if contract_license_enabled
+                    else "Plane Commercial Edition"
+                ),
                 instance_id=data.get("instance_id", secrets.token_hex(12)),
                 current_version=data.get("user_version", app_version),
                 latest_version=data.get("latest_version", app_version),
@@ -88,6 +95,7 @@ class Command(BaseCommand):
                 domain=domain,
                 edition=InstanceEdition.PLANE_COMMERCIAL.value,
                 is_test=os.environ.get("IS_TEST", "0") == "1",
+                is_telemetry_enabled=not contract_license_enabled,
             )
 
             self.stdout.write(self.style.SUCCESS("Instance registered"))
@@ -117,6 +125,8 @@ class Command(BaseCommand):
             instance.edition = InstanceEdition.PLANE_COMMERCIAL.value
             instance.last_checked_at = timezone.now()
             instance.is_test = os.environ.get("IS_TEST", "0") == "1"
+            if contract_license_enabled:
+                instance.is_telemetry_enabled = False
             # Save the instance
             instance.save(
                 update_fields=[
@@ -126,11 +136,13 @@ class Command(BaseCommand):
                     "last_checked_at",
                     "edition",
                     "is_test",
+                    "is_telemetry_enabled",
                 ]
             )
 
             # Capture telemetry data
-            instance_traces.delay()
+            if not contract_license_enabled:
+                instance_traces.delay()
 
             # Print the success message
             self.stdout.write(
