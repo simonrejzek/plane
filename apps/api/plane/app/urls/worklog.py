@@ -5,7 +5,7 @@
 from django.urls import path
 
 from plane.app.views.issue.worklog import IssueTotalWorkLogEndpoint, IssueWorkLogsEndpoint
-from plane.app.views.workspace.worklog import WorkspaceWorkLogsEndpoint
+from plane.app.views.workspace.worklog import WorkspaceExportWorkLogsEndpoint, WorkspaceWorkLogsEndpoint
 
 urlpatterns = [
     path(
@@ -27,5 +27,10 @@ urlpatterns = [
         "workspaces/<str:slug>/worklogs/",
         WorkspaceWorkLogsEndpoint.as_view(),
         name="workspace-worklogs",
+    ),
+    path(
+        "workspaces/<str:slug>/export-worklogs/",
+        WorkspaceExportWorkLogsEndpoint.as_view(),
+        name="workspace-export-worklogs",
     ),
 ]

@@ -97,6 +97,11 @@
           }
         }
       },
+      "worklogs": {
+        "title": "Worklogs",
+        "heading": "Worklogs",
+        "description": "Review time logged across projects, filter by member or date, and export to CSV or Excel."
+      },
       "webhooks": {
         "heading": "Webhooks",
         "description": "Automate notifications to external services when project events occur.",

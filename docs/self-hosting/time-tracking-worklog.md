@@ -38,10 +38,27 @@ CONTRACT_LICENSE_EDITION=PLANE_BUSINESS
 Contract mode is not required for worklogs to function; time tracking is
 available whenever the project flag is enabled.
 
-## Not yet ported from commercial EE
+## Workspace Worklogs analytics
 
-- CSV / XLSX worklog export jobs
-- Full workspace worklogs analytics page (filters UI) — API list exists
+Workspace **Settings → Worklogs**:
+
+- Filters: users, projects, date range
+- Paginated table of all worklogs
+- Download Excel / CSV
+- Previous downloads history
+
+API:
+
+- `GET /api/workspaces/<slug>/worklogs/`
+- `POST/GET /api/workspaces/<slug>/export-worklogs/`
+
+## Mobile WebView auth
+
+- Page: `/m/auth` (must not 404)
+- Sign-in: `POST /auth/mobile/sign-in/`
+- Profiles should have `is_onboarded=true` (bootstrap updates this)
+
+## Still not ported from commercial EE
+
+- Full GraphQL schema for the official mobile app data layer
 - Feature-flag server remote gating (`ISSUE_WORKLOG` flag service)
-
-These can be layered on the same model/API.

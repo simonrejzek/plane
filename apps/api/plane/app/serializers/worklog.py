@@ -12,6 +12,7 @@ from plane.db.models import IssueWorkLog
 
 class IssueWorkLogSerializer(BaseSerializer):
     issue_detail = serializers.SerializerMethodField()
+    project_detail = serializers.SerializerMethodField()
 
     class Meta:
         model = IssueWorkLog
@@ -27,6 +28,7 @@ class IssueWorkLogSerializer(BaseSerializer):
             "workspace_id",
             "logged_by",
             "issue_detail",
+            "project_detail",
         ]
         read_only_fields = [
             "logged_by",
@@ -41,4 +43,12 @@ class IssueWorkLogSerializer(BaseSerializer):
             "id": str(issue.id),
             "sequence_id": issue.sequence_id,
             "name": issue.name,
+        }
+
+    def get_project_detail(self, obj):
+        project = obj.project
+        return {
+            "id": str(project.id),
+            "name": project.name,
+            "identifier": project.identifier,
         }

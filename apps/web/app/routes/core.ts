@@ -18,6 +18,9 @@ export const coreRoutes: RouteConfigEntry[] = [
   // Sign Up
   layout("./(all)/sign-up/layout.tsx", [route("sign-up", "./(all)/sign-up/page.tsx")]),
 
+  // Official mobile WebView auth (must not 404 — app opens /m/auth)
+  route("m/auth", "./(all)/m/auth/page.tsx"),
+
   // Account Routes - Password Management
   layout("./(all)/accounts/forgot-password/layout.tsx", [
     route("accounts/forgot-password", "./(all)/accounts/forgot-password/page.tsx"),
@@ -273,6 +276,10 @@ export const coreRoutes: RouteConfigEntry[] = [
           route(
             ":workspaceSlug/settings/exports",
             "./(all)/[workspaceSlug]/(settings)/settings/(workspace)/exports/page.tsx"
+          ),
+          route(
+            ":workspaceSlug/settings/worklogs",
+            "./(all)/[workspaceSlug]/(settings)/settings/(workspace)/worklogs/page.tsx"
           ),
           route(
             ":workspaceSlug/settings/webhooks",

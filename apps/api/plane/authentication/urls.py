@@ -44,6 +44,7 @@ from .views import (
     GiteaOauthInitiateEndpoint,
     GiteaCallbackSpaceEndpoint,
     GiteaOauthInitiateSpaceEndpoint,
+    MobileSignInAuthEndpoint,
 )
 
 urlpatterns = [
@@ -150,4 +151,6 @@ urlpatterns = [
         GiteaCallbackSpaceEndpoint.as_view(),
         name="space-gitea-callback",
     ),
+    # Official mobile WebView authentication
+    path("mobile/sign-in/", MobileSignInAuthEndpoint.as_view(), name="mobile-sign-in"),
 ]

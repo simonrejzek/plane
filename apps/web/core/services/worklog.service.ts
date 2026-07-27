@@ -5,7 +5,14 @@
  */
 
 import { API_BASE_URL } from "@plane/constants";
-import type { TWorklog, TWorklogIssueTotalCount, TWorklogPaginatedInfo } from "@plane/types";
+import type {
+  TWorklog,
+  TWorklogDownload,
+  TWorklogDownloadFormat,
+  TWorklogDownloadPaginatedInfo,
+  TWorklogIssueTotalCount,
+  TWorklogPaginatedInfo,
+} from "@plane/types";
 // services
 import { APIService } from "@/services/api.service";
 
@@ -19,6 +26,26 @@ export class WorklogService extends APIService {
     params?: Record<string, string | number | undefined>
   ): Promise<TWorklogPaginatedInfo | undefined> {
     const { data } = await this.get(`/api/workspaces/${workspaceSlug}/worklogs/`, { params });
+    return data || undefined;
+  }
+
+  async exportWorkspaceWorklogs(
+    workspaceSlug: string,
+    provider: TWorklogDownloadFormat,
+    filters?: Record<string, string[] | string | undefined>
+  ): Promise<TWorklogDownload | undefined> {
+    const { data } = await this.post(`/api/workspaces/${workspaceSlug}/export-worklogs/`, {
+      provider,
+      filters: filters || {},
+    });
+    return data || undefined;
+  }
+
+  async fetchWorkspaceWorklogDownloads(
+    workspaceSlug: string,
+    params?: Record<string, string | number | undefined>
+  ): Promise<TWorklogDownloadPaginatedInfo | undefined> {
+    const { data } = await this.get(`/api/workspaces/${workspaceSlug}/export-worklogs/`, { params });
     return data || undefined;
   }
 
