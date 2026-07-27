@@ -373,6 +373,10 @@ def push_instance_metrics():
     Replaces the previous span-based tracing approach with OTLP metrics gauges.
     Scheduled to run every 6 hours via Celery beat.
     """
+    if os.environ.get("CONTRACT_LICENSE_ENABLED", "0") == "1":
+        logger.debug("Instance telemetry disabled for contract-licensed self-hosted instance")
+        return
+
     logger.debug("Starting push_instance_metrics task")
     try:
         _collect_and_push_metrics()

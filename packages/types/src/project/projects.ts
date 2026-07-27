@@ -56,6 +56,8 @@ export interface IProject extends IPartialProject {
   estimate?: string | null;
   anchor?: string | null;
   is_favorite?: boolean;
+  /** Contract / Business: issue time tracking */
+  is_time_tracking_enabled?: boolean;
   members?: string[];
   timezone?: string;
   next_work_item_sequence?: number;

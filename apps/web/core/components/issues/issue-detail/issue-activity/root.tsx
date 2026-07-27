@@ -20,6 +20,7 @@ import { CommentCreate } from "@/components/comments/comment-create";
 // hooks
 import { useProject } from "@/hooks/store/use-project";
 // local imports
+import { IssueWorklogPanel } from "@/components/worklogs";
 import { IssueActivityCommentRoot } from "./activity-comment-root";
 import { useWorkItemCommentOperations } from "./helper";
 import { ActivitySortRoot } from "./sort-root";
@@ -91,6 +92,12 @@ export const IssueActivity = observer(function IssueActivity(props: TIssueActivi
 
   return (
     <div className="space-y-4">
+      <IssueWorklogPanel
+        workspaceSlug={workspaceSlug}
+        projectId={projectId}
+        issueId={issueId}
+        disabled={disabled}
+      />
       {/* header */}
       <div className="flex items-center justify-between">
         <div className="text-h5-medium text-primary">{t("common.activity")}</div>

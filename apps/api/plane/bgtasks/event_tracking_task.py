@@ -60,6 +60,10 @@ def preprocess_data_properties(
 
 @shared_task
 def track_event(user_id: uuid.UUID, event_name: str, slug: str, event_properties: Dict[str, Any]):
+    if os.environ.get("CONTRACT_LICENSE_ENABLED", "0") == "1":
+        logger.debug("Event tracking disabled for contract-licensed self-hosted instance")
+        return
+
     POSTHOG_API_KEY, POSTHOG_HOST = posthogConfiguration()
 
     if not (POSTHOG_API_KEY and POSTHOG_HOST):

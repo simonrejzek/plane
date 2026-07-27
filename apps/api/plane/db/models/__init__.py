@@ -78,6 +78,7 @@ from .workspace import (
 )
 
 from .favorite import UserFavorite
+from .worklog import IssueWorkLog
 
 from .issue_type import IssueType
 

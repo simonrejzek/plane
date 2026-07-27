@@ -38,6 +38,11 @@ class Command(BaseCommand):
             return "v0.1.0"
 
     def check_for_latest_version(self, fallback_version):
+        # Contract-licensed self-hosted instances do not need to contact
+        # Plane's release service. Keep the normal community behavior intact.
+        if os.environ.get("CONTRACT_LICENSE_ENABLED", "0") == "1":
+            return fallback_version
+
         try:
             response = requests.get(
                 "https://api.github.com/repos/makeplane/plane/releases/latest",
@@ -57,6 +62,20 @@ class Command(BaseCommand):
         current_version = self.check_for_current_version()
         latest_version = self.check_for_latest_version(current_version)
 
+        contract_license_enabled = os.environ.get("CONTRACT_LICENSE_ENABLED", "0") == "1"
+        configured_edition = os.environ.get(
+            "CONTRACT_LICENSE_EDITION",
+            InstanceEdition.PLANE_BUSINESS.value,
+        )
+        edition = (
+            configured_edition
+            if contract_license_enabled and configured_edition in {
+                InstanceEdition.PLANE_BUSINESS.value,
+                InstanceEdition.PLANE_COMMUNITY.value,
+            }
+            else InstanceEdition.PLANE_COMMUNITY.value
+        )
+
         # If instance is None then register this instance
         if instance is None:
             machine_signature = options.get("machine_signature", "machine-signature")
@@ -65,13 +84,13 @@ class Command(BaseCommand):
                 raise CommandError("Machine signature is required")
 
             instance = Instance.objects.create(
-                instance_name="Plane Community Edition",
+                instance_name="Plane Business Edition" if edition == InstanceEdition.PLANE_BUSINESS.value else "Plane Community Edition",
                 instance_id=secrets.token_hex(12),
                 current_version=current_version,
                 latest_version=latest_version,
                 last_checked_at=timezone.now(),
                 is_test=os.environ.get("IS_TEST", "0") == "1",
-                edition=InstanceEdition.PLANE_COMMUNITY.value,
+                edition=edition,
             )
 
             self.stdout.write(self.style.SUCCESS("Instance registered"))
@@ -83,10 +102,12 @@ class Command(BaseCommand):
             instance.current_version = current_version
             instance.latest_version = latest_version
             instance.is_test = os.environ.get("IS_TEST", "0") == "1"
-            instance.edition = InstanceEdition.PLANE_COMMUNITY.value
+            instance.edition = edition
             instance.save()
 
-        # Push instance metrics on registration
-        push_instance_metrics.delay()
+        # Contract-licensed self-hosted instances are intentionally offline
+        # from Plane-hosted telemetry and registration services.
+        if not contract_license_enabled:
+            push_instance_metrics.delay()
 
         return

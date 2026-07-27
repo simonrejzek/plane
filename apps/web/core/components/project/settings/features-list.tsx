@@ -11,6 +11,7 @@ import { setPromiseToast } from "@plane/propel/toast";
 import { Tooltip } from "@plane/propel/tooltip";
 import type { IProject } from "@plane/types";
 import { CycleIcon, IntakeIcon, ModuleIcon, PageIcon, ViewsIcon } from "@plane/propel/icons";
+import { Timer } from "lucide-react";
 // components
 import { SettingsBoxedControlItem } from "@/components/settings/boxed-control-item";
 import { SettingsHeading } from "@/components/settings/heading";
@@ -73,6 +74,15 @@ const PROJECT_FEATURES_LIST = {
     isPro: false,
     isEnabled: true,
   },
+  time_tracking: {
+    key: "time_tracking",
+    property: "is_time_tracking_enabled",
+    title: "Time tracking",
+    description: "Log time on work items and review tracked hours for your team.",
+    icon: <Timer className="h-5 w-5 flex-shrink-0 text-tertiary" />,
+    isPro: false,
+    isEnabled: true,
+  },
 };
 
 export const ProjectFeaturesList = observer(function ProjectFeaturesList(props: Props) {
@@ -118,7 +128,7 @@ export const ProjectFeaturesList = observer(function ProjectFeaturesList(props: 
               <SettingsBoxedControlItem
                 title={
                   <span className="flex items-center gap-2">
-                    {t(featureItem.key)}
+                    {featureItem.key === "time_tracking" ? featureItem.title : t(featureItem.key)}
                     {featureItem.isPro && (
                       <Tooltip tooltipContent="Pro feature" position="top">
                         <UpgradeBadge className="rounded-sm" />
@@ -126,7 +136,11 @@ export const ProjectFeaturesList = observer(function ProjectFeaturesList(props: 
                     )}
                   </span>
                 }
-                description={t(`${featureItem.key}_description`)}
+                description={
+                  featureItem.key === "time_tracking"
+                    ? featureItem.description
+                    : t(`${featureItem.key}_description`)
+                }
                 control={
                   <ProjectFeatureToggle
                     workspaceSlug={workspaceSlug}
