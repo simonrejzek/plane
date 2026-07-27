@@ -25,7 +25,7 @@ RUN turbo prune --scope=web --docker
 # *****************************************************************************
 # Add lockfile and package.json's of isolated subworkspace
 FROM base AS installer
-ARG BUILD_ID=time-tracking-settings-v1.2
+ARG BUILD_ID=activity-worklog-ux-v1.3
 
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
@@ -77,7 +77,7 @@ RUN pnpm turbo run build --filter=web
 # STAGE 3: Serve with nginx
 # *****************************************************************************
 FROM nginx:1.29-alpine AS production
-ARG BUILD_ID=time-tracking-settings-v1.2
+ARG BUILD_ID=activity-worklog-ux-v1.3
 LABEL cosmic.build_id=$BUILD_ID
 
 RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
