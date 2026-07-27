@@ -38,7 +38,8 @@ class WorkspaceType:
             ).first
         )()
         if workspace_member:
-            return str(workspace_member.role)
+            # Must return int — returning str breaks mobile GraphQL clients
+            return int(workspace_member.role)
         return None
 
 

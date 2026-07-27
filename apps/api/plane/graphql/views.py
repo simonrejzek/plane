@@ -37,15 +37,19 @@ class CustomGraphQLView(AsyncGraphQLView):
 
             # If the token is present, validate it and get the user
             if auth_header:
-                bearer_token = auth_header.split()[1]
+                parts = auth_header.split()
+                # Accept "Bearer <token>" (official app) and raw token
+                bearer_token = parts[1] if len(parts) >= 2 else parts[0]
                 if not bearer_token:
                     context.user = None
                     request.user = None
+                    return context
 
                 validated_token = await get_validated_token(bearer_token)
                 if validated_token is None:
                     context.user = None
                     request.user = None
+                    return context
 
                 # Get the user from the validated token
                 user = await get_jwt_user(validated_token)
@@ -55,7 +59,7 @@ class CustomGraphQLView(AsyncGraphQLView):
                 request.user = user
             else:
                 context.user = None
-        except (InvalidToken, TokenError):
+        except (InvalidToken, TokenError, IndexError, Exception):
             context.user = None
             request.user = None
         return context
@@ -78,5 +82,21 @@ class CustomGraphQLView(AsyncGraphQLView):
                 }
                 for error in result.errors
             ]
+            # Surface GraphQL failures in API logs (HTTP is still often 200)
+            import logging
+
+            logging.getLogger("plane.graphql").error(
+                "GraphQL errors user=%s path=%s errors=%s",
+                getattr(getattr(request, "user", None), "id", None),
+                getattr(request, "path", ""),
+                [
+                    {
+                        "message": e.message,
+                        "path": getattr(e, "path", None),
+                        "extensions": e.extensions or {},
+                    }
+                    for e in result.errors
+                ],
+            )
 
         return processed_result

@@ -30,9 +30,13 @@ try:
     # Import eagerly so ImportErrors are logged instead of silent 404s.
     import plane.graphql.urls  # noqa: F401
 
+    # Register both with and without trailing slash so mobile POST /graphql
+    # does not 301-redirect and drop the request body.
     urlpatterns = [
         path("graphql/", include("plane.graphql.urls")),
+        path("graphql", include("plane.graphql.urls")),
         path("api/graphql/", include("plane.graphql.urls")),
+        path("api/graphql", include("plane.graphql.urls")),
     ] + urlpatterns
 except Exception as graphql_exc:  # noqa: BLE001 — never block API boot if mobile GraphQL fails
     import logging

@@ -57,10 +57,17 @@ class ProfileType:
     role: Optional[str]
     is_onboarded: bool
     last_workspace_id: Optional[strawberry.ID]
-    billing_address_country: JSON
-    billing_address: Optional[str]
+    # Model is CharField; keep String so serialization never fails
+    billing_address_country: Optional[str]
+    # Model is JSONField
+    billing_address: Optional[JSON]
     has_billing_address: bool
     company_name: str
+    # Official mobile app queries these on first load
+    is_mobile_onboarded: bool
+    mobile_onboarding_step: JSON
+    mobile_timezone_auto_set: bool
+    language: str
 
     @strawberry.field
     def user(self) -> int:

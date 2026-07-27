@@ -1,0 +1,278 @@
+# Plane: GraphQL mobile profile fields v1.5.3e runtime patch + version 1.12.0
+x-db-env: &db-env
+  PGHOST: ${PGHOST:-plane-db}
+  PGDATABASE: ${PGDATABASE:-plane}
+  POSTGRES_USER: ${POSTGRES_USER:-plane}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-plane}
+  POSTGRES_DB: ${POSTGRES_DB:-plane}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  PGDATA: ${PGDATA:-/var/lib/postgresql/data}
+
+x-redis-env: &redis-env
+  REDIS_HOST: ${REDIS_HOST:-plane-redis}
+  REDIS_PORT: ${REDIS_PORT:-6379}
+  REDIS_URL: ${REDIS_URL:-redis://plane-redis:6379/}
+
+x-minio-env: &minio-env
+  MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-access-key}
+  MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-secret-key}
+
+x-aws-s3-env: &aws-s3-env
+  AWS_REGION: ${AWS_REGION:-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-access-key}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-secret-key}
+  AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-http://plane-minio:9000}
+  AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-uploads}
+
+x-proxy-env: &proxy-env
+  APP_DOMAIN: ${APP_DOMAIN:-localhost}
+  FILE_SIZE_LIMIT: ${FILE_SIZE_LIMIT:-5242880}
+  BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-uploads}
+  SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-0.0.0.0/0}
+
+x-live-env: &live-env
+  API_BASE_URL: ${API_BASE_URL:-http://api:8000}
+  LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY:-dev-only-change-me}
+
+x-app-env: &app-env
+  APP_DOMAIN: ${APP_DOMAIN:-}
+  APP_BASE_URL: ${APP_BASE_URL:-}
+  WEB_URL: ${WEB_URL:-http://localhost}
+  DEBUG: ${DEBUG:-0}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost}
+  GUNICORN_WORKERS: ${GUNICORN_WORKERS:-1}
+  USE_MINIO: ${USE_MINIO:-1}
+  DATABASE_URL: ${DATABASE_URL:-postgresql://plane:plane@plane-db/plane}
+  SECRET_KEY: ${SECRET_KEY:-dev-only-change-me}
+  AMQP_URL: ${AMQP_URL:-amqp://plane:plane@plane-mq:5672/plane}
+  API_KEY_RATE_LIMIT: ${API_KEY_RATE_LIMIT:-60/minute}
+  MINIO_ENDPOINT_SSL: ${MINIO_ENDPOINT_SSL:-0}
+  LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY:-dev-only-change-me}
+  WEBHOOK_ALLOWED_IPS: ${WEBHOOK_ALLOWED_IPS:-}
+  WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
+  CONTRACT_LICENSE_ENABLED: ${CONTRACT_LICENSE_ENABLED:-1}
+  CONTRACT_LICENSE_EDITION: ${CONTRACT_LICENSE_EDITION:-PLANE_BUSINESS}
+  APP_VERSION: ${APP_VERSION:-1.12.0}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_PROVIDER: ${LLM_PROVIDER:-custom}
+  LLM_MODEL: ${LLM_MODEL:-}
+  LLM_BASE_URL: ${LLM_BASE_URL:-}
+  LLM_ALLOW_CUSTOM_MODEL: ${LLM_ALLOW_CUSTOM_MODEL:-1}
+
+services:
+  plane-db:
+    image: postgres:15.7-alpine
+    restart: always
+    command: postgres -c 'max_connections=1000'
+    environment:
+      <<: *db-env
+    volumes:
+      - pgdata_latest:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-plane} -d ${POSTGRES_DB:-plane}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  plane-redis:
+    image: valkey/valkey:7.2.11-alpine
+    restart: always
+    volumes:
+      - redisdata_latest:/data
+
+  plane-mq:
+    image: rabbitmq:3.13.6-management-alpine
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-plane}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-plane}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-plane}
+    volumes:
+      - rabbitmq_data_latest:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  plane-minio:
+    image: minio/minio:latest
+    restart: always
+    command: server /export --console-address ":9090"
+    environment:
+      <<: *minio-env
+    volumes:
+      - uploads_latest:/export
+
+  migrator:
+    image: plane-latest-api:cosmic-worklog-v1.5.3c
+    restart: "no"
+    command: ./bin/docker-entrypoint-migrator.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_started
+
+  bootstrap:
+    image: plane-latest-api:cosmic-worklog-v1.5.3c
+    restart: "no"
+    command:
+      - python
+      - manage.py
+      - shell
+      - -c
+      - |
+        import os
+        from django.core.cache import cache
+        from plane.db.models import Profile, Project
+        from plane.license.models import Instance
+        domain = os.environ.get("APP_DOMAIN", "").strip()
+        app_version = (os.environ.get("APP_VERSION") or "1.12.0").strip().lstrip("v")
+        inst = Instance.objects.first()
+        if inst:
+            fields = []
+            if domain and inst.domain != domain:
+                inst.domain = domain
+                fields.append("domain")
+            if os.environ.get("CONTRACT_LICENSE_ENABLED", "0") == "1":
+                if getattr(inst, "is_telemetry_enabled", False):
+                    inst.is_telemetry_enabled = False
+                    fields.append("is_telemetry_enabled")
+                edition = os.environ.get("CONTRACT_LICENSE_EDITION", "PLANE_BUSINESS")
+                if hasattr(inst, "edition") and inst.edition != edition:
+                    inst.edition = edition
+                    fields.append("edition")
+            if inst.current_version != app_version:
+                inst.current_version = app_version
+                fields.append("current_version")
+            if inst.latest_version != app_version:
+                inst.latest_version = app_version
+                fields.append("latest_version")
+            if getattr(inst, "is_current_version_deprecated", False):
+                inst.is_current_version_deprecated = False
+                fields.append("is_current_version_deprecated")
+            if fields:
+                inst.save(update_fields=fields)
+                print("instance_updated", ",".join(fields), "version", app_version)
+            else:
+                print("instance_ok", "version", app_version)
+        n = Project.objects.filter(is_time_tracking_enabled=False).update(is_time_tracking_enabled=True)
+        print("time_tracking_enabled", n)
+        onboarded = Profile.objects.filter(is_onboarded=False).update(is_onboarded=True)
+        print("profiles_onboarded", onboarded)
+        mobile_onboarded = Profile.objects.filter(is_mobile_onboarded=False).update(is_mobile_onboarded=True)
+        print("profiles_mobile_onboarded", mobile_onboarded)
+        try:
+            cache.clear()
+            print("cache_cleared")
+        except Exception as e:
+            print("cache_clear_err", e)
+    environment:
+      <<: [*app-env, *db-env, *redis-env]
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+
+
+  api:
+    image: plane-latest-api:cosmic-worklog-v1.5.3c
+    restart: always
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        echo CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKdXNlcnMgPSBQYXRoKCIvY29kZS9wbGFuZS9ncmFwaHFsL3R5cGVzL3VzZXJzLnB5IikKdXQgPSB1c2Vycy5yZWFkX3RleHQoKQppZiAiaXNfbW9iaWxlX29uYm9hcmRlZCIgbm90IGluIHV0OgogICAgb2xkID0gKAogICAgICAgICIgICAgbGFzdF93b3Jrc3BhY2VfaWQ6IE9wdGlvbmFsW3N0cmF3YmVycnkuSURdXG4iCiAgICAgICAgIiAgICBiaWxsaW5nX2FkZHJlc3NfY291bnRyeTogSlNPTlxuIgogICAgICAgICIgICAgYmlsbGluZ19hZGRyZXNzOiBPcHRpb25hbFtzdHJdXG4iCiAgICAgICAgIiAgICBoYXNfYmlsbGluZ19hZGRyZXNzOiBib29sXG4iCiAgICAgICAgIiAgICBjb21wYW55X25hbWU6IHN0clxuIgogICAgKQogICAgbmV3ID0gKAogICAgICAgICIgICAgbGFzdF93b3Jrc3BhY2VfaWQ6IE9wdGlvbmFsW3N0cmF3YmVycnkuSURdXG4iCiAgICAgICAgIiAgICBiaWxsaW5nX2FkZHJlc3NfY291bnRyeTogT3B0aW9uYWxbc3RyXVxuIgogICAgICAgICIgICAgYmlsbGluZ19hZGRyZXNzOiBPcHRpb25hbFtKU09OXVxuIgogICAgICAgICIgICAgaGFzX2JpbGxpbmdfYWRkcmVzczogYm9vbFxuIgogICAgICAgICIgICAgY29tcGFueV9uYW1lOiBzdHJcbiIKICAgICAgICAiICAgIGlzX21vYmlsZV9vbmJvYXJkZWQ6IGJvb2xcbiIKICAgICAgICAiICAgIG1vYmlsZV9vbmJvYXJkaW5nX3N0ZXA6IEpTT05cbiIKICAgICAgICAiICAgIG1vYmlsZV90aW1lem9uZV9hdXRvX3NldDogYm9vbFxuIgogICAgICAgICIgICAgbGFuZ3VhZ2U6IHN0clxuIgogICAgKQogICAgaWYgb2xkIG5vdCBpbiB1dDoKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KCJQcm9maWxlVHlwZSBwYXRjaCB0YXJnZXQgbWlzc2luZyIpCiAgICB1c2Vycy53cml0ZV90ZXh0KHV0LnJlcGxhY2Uob2xkLCBuZXcsIDEpKQogICAgcHJpbnQoInBhdGNoZWQtcHJvZmlsZS10eXBlIikKZWxzZToKICAgIHByaW50KCJwcm9maWxlLXR5cGUtYWxyZWFkeS1wYXRjaGVkIikKCnVybHMgPSBQYXRoKCIvY29kZS9wbGFuZS91cmxzLnB5IikKdCA9IHVybHMucmVhZF90ZXh0KCkKbWFya2VyID0gJ3BhdGgoImdyYXBocWwiLCBpbmNsdWRlKCJwbGFuZS5ncmFwaHFsLnVybHMiKSknCmlmIG1hcmtlciBub3QgaW4gdDoKICAgIG9sZCA9ICgKICAgICAgICAiICAgIHVybHBhdHRlcm5zID0gW1xuIgogICAgICAgICcgICAgICAgIHBhdGgoImdyYXBocWwvIiwgaW5jbHVkZSgicGxhbmUuZ3JhcGhxbC51cmxzIikpLFxuJwogICAgICAgICcgICAgICAgIHBhdGgoImFwaS9ncmFwaHFsLyIsIGluY2x1ZGUoInBsYW5lLmdyYXBocWwudXJscyIpKSxcbicKICAgICAgICAiICAgIF0gKyB1cmxwYXR0ZXJuc1xuIgogICAgKQogICAgbmV3ID0gKAogICAgICAgICIgICAgdXJscGF0dGVybnMgPSBbXG4iCiAgICAgICAgJyAgICAgICAgcGF0aCgiZ3JhcGhxbC8iLCBpbmNsdWRlKCJwbGFuZS5ncmFwaHFsLnVybHMiKSksXG4nCiAgICAgICAgJyAgICAgICAgcGF0aCgiZ3JhcGhxbCIsIGluY2x1ZGUoInBsYW5lLmdyYXBocWwudXJscyIpKSxcbicKICAgICAgICAnICAgICAgICBwYXRoKCJhcGkvZ3JhcGhxbC8iLCBpbmNsdWRlKCJwbGFuZS5ncmFwaHFsLnVybHMiKSksXG4nCiAgICAgICAgJyAgICAgICAgcGF0aCgiYXBpL2dyYXBocWwiLCBpbmNsdWRlKCJwbGFuZS5ncmFwaHFsLnVybHMiKSksXG4nCiAgICAgICAgIiAgICBdICsgdXJscGF0dGVybnNcbiIKICAgICkKICAgIGlmIG9sZCBub3QgaW4gdDoKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KCJ1cmxzIGdyYXBocWwgcGF0Y2ggdGFyZ2V0IG1pc3NpbmciKQogICAgdXJscy53cml0ZV90ZXh0KHQucmVwbGFjZShvbGQsIG5ldywgMSkpCiAgICBwcmludCgicGF0Y2hlZC1ncmFwaHFsLXVybHMiKQplbHNlOgogICAgcHJpbnQoInVybHMtYWxyZWFkeS1wYXRjaGVkIikKCndzID0gUGF0aCgiL2NvZGUvcGxhbmUvZ3JhcGhxbC90eXBlcy93b3Jrc3BhY2UucHkiKQp3dCA9IHdzLnJlYWRfdGV4dCgpCmlmICJyZXR1cm4gc3RyKHdvcmtzcGFjZV9tZW1iZXIucm9sZSkiIGluIHd0OgogICAgd3Mud3JpdGVfdGV4dCh3dC5yZXBsYWNlKCJyZXR1cm4gc3RyKHdvcmtzcGFjZV9tZW1iZXIucm9sZSkiLCAicmV0dXJuIGludCh3b3Jrc3BhY2VfbWVtYmVyLnJvbGUpIikpCiAgICBwcmludCgicGF0Y2hlZC13b3Jrc3BhY2Utcm9sZSIpCmVsc2U6CiAgICBwcmludCgid29ya3NwYWNlLXJvbGUtb2siKQo= | base64 -d > /tmp/cosmic-gql-patch.py
+        python /tmp/cosmic-gql-patch.py
+        exec ./bin/docker-entrypoint-api.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_started
+      plane-mq:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      bootstrap:
+        condition: service_completed_successfully
+
+  worker:
+    image: plane-latest-api:cosmic-worklog-v1.5.3c
+    restart: always
+    command: ./bin/docker-entrypoint-worker.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    depends_on:
+      api:
+        condition: service_started
+
+  beat-worker:
+    image: plane-latest-api:cosmic-worklog-v1.5.3c
+    restart: always
+    command: ./bin/docker-entrypoint-beat.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    depends_on:
+      api:
+        condition: service_started
+
+  web:
+    image: plane-latest-web:cosmic-worklog-v1.4
+    restart: always
+    depends_on:
+      - api
+      - worker
+
+  space:
+    image: makeplane/plane-space:v1.3.1
+    restart: always
+    depends_on:
+      - api
+      - web
+
+  admin:
+    image: makeplane/plane-admin:v1.3.1
+    restart: always
+    depends_on:
+      - api
+      - web
+
+  live:
+    image: makeplane/plane-live:v1.3.1
+    restart: always
+    environment:
+      <<: [*live-env, *redis-env]
+    depends_on:
+      - api
+      - web
+
+  proxy:
+    image: plane-latest-proxy:cosmic-worklog-v1.5.1
+    restart: always
+    expose:
+      - "80"
+    environment:
+      <<: *proxy-env
+    depends_on:
+      - web
+      - api
+      - space
+      - admin
+      - live
+
+
+volumes:
+  pgdata_latest:
+  redisdata_latest:
+  uploads_latest:
+  rabbitmq_data_latest:
