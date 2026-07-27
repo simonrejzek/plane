@@ -8,6 +8,7 @@
 import ipaddress
 import logging
 import os
+from datetime import timedelta
 from urllib.parse import urlparse
 from urllib.parse import urljoin
 
@@ -111,6 +112,7 @@ INSTALLED_APPS = [
     "plane.license",
     "plane.api",
     "plane.authentication",
+    "plane.graphql",
     # Third-party things
     "rest_framework",
     "corsheaders",
@@ -568,3 +570,23 @@ if ENABLE_DRF_SPECTACULAR:
     REST_FRAMEWORK["DEFAULT_SCHEMA_CLASS"] = "drf_spectacular.openapi.AutoSchema"
     INSTALLED_APPS.append("drf_spectacular")
     from .openapi import SPECTACULAR_SETTINGS  # noqa: F401
+
+# JWT for official mobile app
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(os.environ.get("ACCESS_TOKEN_LIFETIME", 15))),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=int(os.environ.get("REFRESH_TOKEN_LIFETIME", 90))),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": False,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": SECRET_KEY,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "AUTH_HEADER_NAME": "HTTP_AUTHORIZATION",
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+}
+
+# Mobile GraphQL feature-flag server (optional; contract mode stubs are used when unset)
+FEATURE_FLAG_SERVER_BASE_URL = os.environ.get("FEATURE_FLAG_SERVER_BASE_URL", "")
+FEATURE_FLAG_SERVER_AUTH_TOKEN = os.environ.get("FEATURE_FLAG_SERVER_AUTH_TOKEN", "")
+PAYMENT_SERVER_BASE_URL = os.environ.get("PAYMENT_SERVER_BASE_URL", False)
+

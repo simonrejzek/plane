@@ -45,6 +45,11 @@ from .views import (
     GiteaCallbackSpaceEndpoint,
     GiteaOauthInitiateSpaceEndpoint,
     MobileSignInAuthEndpoint,
+    MobileSignOutAuthEndpoint,
+    MobileSessionTokenCheckEndpoint,
+    MobileTokenEndpoint,
+    MobileSessionTokenEndpoint,
+    MobileRefreshTokenEndpoint,
 )
 
 urlpatterns = [
@@ -153,4 +158,9 @@ urlpatterns = [
     ),
     # Official mobile WebView authentication
     path("mobile/sign-in/", MobileSignInAuthEndpoint.as_view(), name="mobile-sign-in"),
+    path("mobile/token-check/", MobileSessionTokenCheckEndpoint.as_view(), name="mobile-token-check"),
+    path("mobile/sign-out/", MobileSignOutAuthEndpoint.as_view(), name="mobile-sign-out"),
+    path("mobile/session-token/", MobileSessionTokenEndpoint.as_view(), name="mobile-session-token"),
+    path("mobile/token/", MobileTokenEndpoint.as_view(), name="mobile-token"),
+    path("mobile/refresh-token/", MobileRefreshTokenEndpoint.as_view(), name="mobile-refresh-token"),
 ]
