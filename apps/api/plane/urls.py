@@ -20,9 +20,19 @@ urlpatterns = [
     path("api/instances/", include("plane.license.urls")),
     path("api/v1/", include("plane.api.urls")),
     path("auth/", include("plane.authentication.urls")),
-    path("graphql/", include("plane.graphql.urls")),
     path("", include("plane.web.urls")),
 ]
+
+try:
+    import strawberry  # noqa: F401
+
+    # Mobile app expects /graphql/; also expose under /api/graphql/ as fallback
+    urlpatterns = [
+        path("graphql/", include("plane.graphql.urls")),
+        path("api/graphql/", include("plane.graphql.urls")),
+    ] + urlpatterns
+except ImportError:
+    pass
 
 if settings.ENABLE_DRF_SPECTACULAR:
     urlpatterns += [

@@ -112,12 +112,19 @@ INSTALLED_APPS = [
     "plane.license",
     "plane.api",
     "plane.authentication",
-    "plane.graphql",
     # Third-party things
     "rest_framework",
     "corsheaders",
     "django_celery_beat",
 ]
+
+# Official mobile GraphQL (optional if strawberry is installed)
+try:
+    import strawberry  # noqa: F401
+
+    INSTALLED_APPS.append("plane.graphql")
+except ImportError:
+    pass
 
 # Middlewares
 MIDDLEWARE = [
