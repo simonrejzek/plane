@@ -8,7 +8,12 @@ export class ViewService extends CoreViewService {
     super(API_BASE_URL);
   }
 
-  async updateViewAccess(workspaceSlug: string, projectId: string, viewId: string, access: EViewAccess) {
+  async updateViewAccess(
+    workspaceSlug: string,
+    projectId: string,
+    viewId: string,
+    access: EViewAccess
+  ): Promise<any> {
     return await this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/views/${viewId}/access/`, {
       access,
     }).catch((error) => {
@@ -16,7 +21,7 @@ export class ViewService extends CoreViewService {
     });
   }
 
-  async lockView(workspaceSlug: string, projectId: string, viewId: string) {
+  async lockView(workspaceSlug: string, projectId: string, viewId: string): Promise<any> {
     return await this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/views/${viewId}/lock/`).catch(
       (error) => {
         throw error?.response?.data;
@@ -24,7 +29,7 @@ export class ViewService extends CoreViewService {
     );
   }
 
-  async unLockView(workspaceSlug: string, projectId: string, viewId: string) {
+  async unLockView(workspaceSlug: string, projectId: string, viewId: string): Promise<any> {
     return await this.delete(`/api/workspaces/${workspaceSlug}/projects/${projectId}/views/${viewId}/lock/`).catch(
       (error) => {
         throw error?.response?.data;
@@ -32,7 +37,7 @@ export class ViewService extends CoreViewService {
     );
   }
 
-  async getPublishDetails(workspaceSlug: string, projectId: string, viewId: string) {
+  async getPublishDetails(workspaceSlug: string, projectId: string, viewId: string): Promise<any> {
     return await this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/views/${viewId}/publish/`)
       .then((response) => response?.data)
       .catch((error) => {
@@ -40,7 +45,12 @@ export class ViewService extends CoreViewService {
       });
   }
 
-  async publishView(workspaceSlug: string, projectId: string, viewId: string, data: TPublishViewSettings) {
+  async publishView(
+    workspaceSlug: string,
+    projectId: string,
+    viewId: string,
+    data: TPublishViewSettings
+  ): Promise<any> {
     return await this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/views/${viewId}/publish/`, {
       ...data,
       view_props: {
@@ -62,7 +72,7 @@ export class ViewService extends CoreViewService {
     projectId: string,
     viewId: string,
     data: Partial<TPublishViewSettings>
-  ) {
+  ): Promise<any> {
     return await this.patch(`/api/workspaces/${workspaceSlug}/projects/${projectId}/views/${viewId}/publish/`, data)
       .then((response) => response?.data)
       .catch((error) => {
@@ -70,7 +80,7 @@ export class ViewService extends CoreViewService {
       });
   }
 
-  async unPublishView(workspaceSlug: string, projectId: string, viewId: string) {
+  async unPublishView(workspaceSlug: string, projectId: string, viewId: string): Promise<any> {
     return await this.delete(`/api/workspaces/${workspaceSlug}/projects/${projectId}/views/${viewId}/publish/`)
       .then((response) => response?.data)
       .catch((error) => {

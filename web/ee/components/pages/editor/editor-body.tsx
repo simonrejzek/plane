@@ -260,6 +260,7 @@ export const WorkspacePageEditorBody: React.FC<Props> = observer((props) => {
             <CollaborativeDocumentReadOnlyEditorWithRef
               id={pageId}
               ref={readOnlyEditorRef}
+              disabledExtensions={documentEditor}
               handleEditorReady={handleReadOnlyEditorReady}
               containerClassName="p-0 pb-64 border-none"
               displayConfig={displayConfig}

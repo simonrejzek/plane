@@ -65,6 +65,7 @@ export const PageDetailsMainContent: React.FC<Props> = observer((props) => {
             id={pageDetails.id}
             initialValue={pageDetails.description_html ?? "<p></p>"}
             containerClassName="p-0 pb-64 border-none"
+            disabledExtensions={[]}
             fileHandler={getReadOnlyEditorFileHandlers({
               anchor,
             })}
