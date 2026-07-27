@@ -27,12 +27,17 @@ try:
     import strawberry  # noqa: F401
 
     # Mobile app expects /graphql/; also expose under /api/graphql/ as fallback
+    # Import eagerly so ImportErrors are logged instead of silent 404s.
+    import plane.graphql.urls  # noqa: F401
+
     urlpatterns = [
         path("graphql/", include("plane.graphql.urls")),
         path("api/graphql/", include("plane.graphql.urls")),
     ] + urlpatterns
-except ImportError:
-    pass
+except Exception as graphql_exc:  # noqa: BLE001 — never block API boot if mobile GraphQL fails
+    import logging
+
+    logging.getLogger(__name__).exception("Mobile GraphQL disabled: %s", graphql_exc)
 
 if settings.ENABLE_DRF_SPECTACULAR:
     urlpatterns += [

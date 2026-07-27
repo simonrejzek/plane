@@ -34,26 +34,50 @@ export function InstanceAIForm(props: IInstanceAIForm) {
     defaultValues: {
       LLM_API_KEY: config["LLM_API_KEY"],
       LLM_MODEL: config["LLM_MODEL"],
+      LLM_PROVIDER: config["LLM_PROVIDER"] || "custom",
+      LLM_BASE_URL: config["LLM_BASE_URL"] || "",
     },
   });
 
   const aiFormFields: TControllerInputFormField[] = [
+    {
+      key: "LLM_PROVIDER",
+      type: "text",
+      label: "Provider",
+      description: (
+        <>
+          Use <code className="text-12">custom</code> for any OpenAI-compatible endpoint (OpenRouter, vLLM, Azure-style
+          proxies, etc.). Also supports <code className="text-12">openai</code>,{" "}
+          <code className="text-12">anthropic</code>, and <code className="text-12">gemini</code>.
+        </>
+      ),
+      placeholder: "custom",
+      error: Boolean(errors.LLM_PROVIDER),
+      required: false,
+    },
+    {
+      key: "LLM_BASE_URL",
+      type: "text",
+      label: "Custom endpoint (BYOK)",
+      description: (
+        <>
+          OpenAI-compatible base URL for your provider or proxy (e.g.{" "}
+          <code className="text-12">https://openrouter.ai/api/v1</code> or{" "}
+          <code className="text-12">https://api.openai.com/v1</code>). Leave empty for the default provider host.
+        </>
+      ),
+      placeholder: "https://openrouter.ai/api/v1",
+      error: Boolean(errors.LLM_BASE_URL),
+      required: false,
+    },
     {
       key: "LLM_MODEL",
       type: "text",
       label: "LLM Model",
       description: (
         <>
-          Choose an OpenAI engine.{" "}
-          <a
-            href="https://platform.openai.com/docs/models/overview"
-            target="_blank"
-            className="text-accent-primary hover:underline"
-            rel="noreferrer"
-            aria-label="OpenAI models documentation"
-          >
-            Learn more
-          </a>
+          Any model id your endpoint accepts (BYOK). Examples: <code className="text-12">gpt-4o-mini</code>,{" "}
+          <code className="text-12">anthropic/claude-3.5-sonnet</code>.
         </>
       ),
       placeholder: "gpt-4o-mini",
@@ -64,21 +88,8 @@ export function InstanceAIForm(props: IInstanceAIForm) {
       key: "LLM_API_KEY",
       type: "password",
       label: "API key",
-      description: (
-        <>
-          You will find your API key{" "}
-          <a
-            href="https://platform.openai.com/api-keys"
-            target="_blank"
-            className="text-accent-primary hover:underline"
-            rel="noreferrer"
-            aria-label="OpenAI API keys page"
-          >
-            here.
-          </a>
-        </>
-      ),
-      placeholder: "sk-asddassdfasdefqsdfasd23das3dasdcasd",
+      description: <>Your provider API key (stored encrypted). Required for Plane AI features.</>,
+      placeholder: "sk-... or provider-specific key",
       error: Boolean(errors.LLM_API_KEY),
       required: false,
     },
@@ -102,10 +113,12 @@ export function InstanceAIForm(props: IInstanceAIForm) {
     <div className="space-y-8">
       <div className="space-y-3">
         <div>
-          <div className="pb-1 text-18 font-medium text-primary">OpenAI</div>
-          <div className="text-13 font-regular text-tertiary">If you use ChatGPT, this is for you.</div>
+          <div className="pb-1 text-18 font-medium text-primary">Plane AI (BYOK)</div>
+          <div className="text-13 font-regular text-tertiary">
+            Bring your own key and optional custom endpoint. Works with OpenAI and any OpenAI-compatible API.
+          </div>
         </div>
-        <div className="grid-col grid w-full grid-cols-1 items-center justify-between gap-x-12 gap-y-8 lg:grid-cols-3">
+        <div className="grid-col grid w-full grid-cols-1 items-center justify-between gap-x-12 gap-y-8 lg:grid-cols-2">
           {aiFormFields.map((field) => (
             <ControllerInput
               key={field.key}
@@ -130,10 +143,10 @@ export function InstanceAIForm(props: IInstanceAIForm) {
         <div className="relative inline-flex items-center gap-1.5 rounded-sm border border-accent-subtle bg-accent-subtle px-4 py-2 text-caption-sm-regular text-accent-secondary">
           <Lightbulb className="size-4" />
           <div>
-            If you have a preferred AI models vendor, please get in{" "}
-            <a className="font-medium underline" href="https://plane.so/contact">
-              touch with us.
-            </a>
+            You can also set <code className="text-12">LLM_API_KEY</code>, <code className="text-12">LLM_MODEL</code>,{" "}
+            <code className="text-12">LLM_PROVIDER=custom</code>, and <code className="text-12">LLM_BASE_URL</code> as
+            environment variables. Custom models are allowed when provider is custom or{" "}
+            <code className="text-12">LLM_ALLOW_CUSTOM_MODEL=1</code>.
           </div>
         </div>
       </div>

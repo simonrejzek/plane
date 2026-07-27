@@ -27,7 +27,7 @@ from plane.graphql.types.issue import (
 from plane.db.models import (
     Issue,
     IssueActivity,
-    IssueUserProperty,
+    ProjectUserProperty,
     IssueComment,
     CommentReaction,
     IssueType,
@@ -254,7 +254,7 @@ class IssueUserPropertyQuery:
         project: strawberry.ID,
     ) -> IssueUserPropertyType:
         def get_issue_user_property():
-            issue_properties, _ = IssueUserProperty.objects.get_or_create(
+            issue_properties, _ = ProjectUserProperty.objects.get_or_create(
                 workspace__slug=slug,
                 project_id=project,
                 user=info.context.user,

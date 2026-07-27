@@ -22,7 +22,7 @@ from plane.db.models import (
     Project,
     ProjectMember,
     UserFavorite,
-    IssueUserProperty,
+    ProjectUserProperty,
     State,
 )
 
@@ -74,7 +74,7 @@ class ProjectMutation:
             role=20,
         )
         # creating the issue property for the user
-        _ = await sync_to_async(IssueUserProperty.objects.create)(
+        _ = await sync_to_async(ProjectUserProperty.objects.create)(
             project_id=project.id,
             user_id=info.context.user.id,
         )
@@ -88,7 +88,7 @@ class ProjectMutation:
                 role=20,
             )
             # creating the issue property for the user
-            _ = await sync_to_async(IssueUserProperty.objects.create)(
+            _ = await sync_to_async(ProjectUserProperty.objects.create)(
                 project_id=project.id,
                 user_id=project_lead,
             )

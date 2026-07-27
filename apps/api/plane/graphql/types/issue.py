@@ -17,7 +17,7 @@ from plane.db.models import (
     Issue,
     IssueLabel,
     IssueAssignee,
-    IssueUserProperty,
+    ProjectUserProperty,
     IssueActivity,
     IssueComment,
     CycleIssue,
@@ -154,7 +154,7 @@ class IssuesType:
         return self.parent.project.identifier if self.parent else None
 
 
-@strawberry_django.type(IssueUserProperty)
+@strawberry_django.type(ProjectUserProperty)
 class IssueUserPropertyType:
     display_filters: JSON
     display_properties: JSON
