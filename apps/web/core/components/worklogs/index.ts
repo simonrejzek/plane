@@ -4,5 +4,7 @@
  * See the LICENSE file for details.
  */
 
-export * from "./issue-worklog-panel";
+export * from "./activity-worklog-item";
 export * from "./issue-worklog-sidebar-property";
+export * from "./log-work-button";
+export * from "./worklog-form";

@@ -17,10 +17,10 @@ import { useTranslation } from "@plane/i18n";
 import type { TFileSignedURLResponse, TIssueComment } from "@plane/types";
 // components
 import { CommentCreate } from "@/components/comments/comment-create";
+import { IssueActivityWorklogCreateButton } from "@/components/worklogs";
 // hooks
 import { useProject } from "@/hooks/store/use-project";
 // local imports
-import { IssueWorklogPanel } from "@/components/worklogs";
 import { IssueActivityCommentRoot } from "./activity-comment-root";
 import { useWorkItemCommentOperations } from "./helper";
 import { ActivitySortRoot } from "./sort-root";
@@ -92,16 +92,18 @@ export const IssueActivity = observer(function IssueActivity(props: TIssueActivi
 
   return (
     <div className="space-y-4">
-      <IssueWorklogPanel
-        workspaceSlug={workspaceSlug}
-        projectId={projectId}
-        issueId={issueId}
-        disabled={disabled}
-      />
       {/* header */}
       <div className="flex items-center justify-between">
         <div className="text-h5-medium text-primary">{t("common.activity")}</div>
         <div className="flex items-center gap-2">
+          {!disabled && !isIntakeIssue && (
+            <IssueActivityWorklogCreateButton
+              workspaceSlug={workspaceSlug}
+              projectId={projectId}
+              issueId={issueId}
+              disabled={disabled}
+            />
+          )}
           <ActivitySortRoot sortOrder={sortOrder || E_SORT_ORDER.ASC} toggleSort={toggleSortOrder} />
           <ActivityFilterRoot
             selectedFilters={selectedFilters || defaultActivityFilters}

@@ -7,10 +7,11 @@
 import { observer } from "mobx-react";
 // plane imports
 import type { E_SORT_ORDER, TActivityFilters, EActivityFilterType } from "@plane/constants";
-import { BASE_ACTIVITY_FILTER_TYPES, filterActivityOnSelectedFilters } from "@plane/constants";
+import { BASE_ACTIVITY_FILTER_TYPES, EActivityFilterType as ActivityFilter, filterActivityOnSelectedFilters } from "@plane/constants";
 import type { TCommentsOperations } from "@plane/types";
 // components
 import { CommentCard } from "@/components/comments/card/root";
+import { IssueActivityWorklogItem } from "@/components/worklogs";
 // hooks
 import { useIssueDetail } from "@/hooks/store/use-issue-detail";
 // local imports
@@ -72,6 +73,16 @@ export const IssueActivityCommentRoot = observer(function IssueActivityCommentRo
             disabled={disabled}
             projectId={projectId}
             enableReplies
+          />
+        ) : activityComment.activity_type === ActivityFilter.WORKLOG ? (
+          <IssueActivityWorklogItem
+            key={activityComment.id}
+            workspaceSlug={workspaceSlug}
+            projectId={projectId}
+            issueId={issueId}
+            worklogId={activityComment.id}
+            ends={index === 0 ? "top" : index === filteredActivityAndComments.length - 1 ? "bottom" : undefined}
+            disabled={disabled}
           />
         ) : BASE_ACTIVITY_FILTER_TYPES.includes(activityComment.activity_type as EActivityFilterType) ? (
           <IssueActivityItem

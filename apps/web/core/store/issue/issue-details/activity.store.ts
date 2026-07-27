@@ -124,6 +124,17 @@ export class IssueActivityStore implements IIssueActivityStore {
       });
     });
 
+    // Contract / Business: merge issue worklogs into the activity timeline
+    const worklogs = this.store.worklog.getWorklogsByIssueId(issueId);
+    worklogs.forEach((worklog) => {
+      if (!worklog.id) return;
+      activityComments.push({
+        id: worklog.id,
+        activity_type: EActivityFilterType.WORKLOG,
+        created_at: worklog.created_at,
+      });
+    });
+
     return activityComments;
   }
 
@@ -152,6 +163,14 @@ export class IssueActivityStore implements IIssueActivityStore {
       if (currentActivityIds && currentActivityIds.length > 0) {
         const currentActivity = this.getActivityById(currentActivityIds[currentActivityIds.length - 1]);
         if (currentActivity) props = { created_at__gt: currentActivity.created_at };
+      }
+
+      // Fetch worklogs in parallel when time tracking is enabled on the project
+      const project = this.store.projectRoot.project.getProjectById(projectId);
+      if (project?.is_time_tracking_enabled) {
+        void this.store.worklog.fetchIssueWorklogs(workspaceSlug, projectId, issueId).catch(() => {
+          // non-blocking: worklogs are additive to the activity feed
+        });
       }
 
       const activities = await this.issueActivityService.getIssueActivities(workspaceSlug, projectId, issueId, props);
