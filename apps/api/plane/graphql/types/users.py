@@ -49,7 +49,8 @@ class UserType:
 @strawberry_django.type(Profile)
 class ProfileType:
     id: strawberry.ID
-    user: strawberry.ID
+    # Relation (not scalar ID) so mobile can query profile { user { id email } }
+    user: UserType
     theme: JSON
     is_tour_completed: bool
     onboarding_step: JSON
@@ -68,10 +69,6 @@ class ProfileType:
     mobile_onboarding_step: JSON
     mobile_timezone_auto_set: bool
     language: str
-
-    @strawberry.field
-    def user(self) -> int:
-        return self.user_id
 
     @strawberry.field
     async def last_workspace_id(self, info: Info) -> Optional[strawberry.ID]:

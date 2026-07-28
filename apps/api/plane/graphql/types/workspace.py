@@ -22,13 +22,10 @@ class WorkspaceType:
     name: str
     slug: str
     logo: Optional[str]
-    owner: strawberry.ID
+    # Relation so mobile can query workspaces { owner { id email } }
+    owner: UserType
     organization_size: Optional[str]
     logo_url: Optional[str]
-
-    @strawberry.field
-    def owner(self) -> int:
-        return self.owner_id
 
     @strawberry_django.field
     async def role(self, info: Info) -> Optional[int]:
