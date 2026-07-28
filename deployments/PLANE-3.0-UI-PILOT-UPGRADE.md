@@ -1,102 +1,90 @@
-# Plane 3.0 — UI + Pilot AI upgrade (CosmicBoosts)
+# Plane 3.0 — UI + Pilot AI (live on plane.cosmicboosts.store)
 
-**Scope (owner direction):** primarily the **3.0 web UI** and **Pilot AI (Plane Intelligence)**.  
-**Reference:** authenticated Business trial on `app.plane.so` (workspace `kospov`, plan BUSINESS).  
-**Date:** 2026-07-29
+**Status:** LIVE (2026-07-29)  
+**Reference:** Business trial on `app.plane.so` / `pi.plane.so` (workspace `kospov`)  
+**Constraint:** No commercial 3.0 Docker images (support: contracts cannot use them). Built by reverse-engineering cloud APIs + UI shell.
 
-## Reference findings from app.plane.so (Business cookies)
+## What is live now
 
-### Cloud instance
-- Edition: `PLANE_CLOUD`, `min_desktop_version: 3.0.0`
-- Workspace: `kospov` · plan **BUSINESS** · trial
-- Workspace features of note:
-  - `is_pi_enabled: true` ← Pilot / Plane Intelligence UI gate
-  - `is_wiki_enabled: true`
-  - hierarchy / work-item-types / releases largely off on this trial
+| Layer | Implementation |
+|-------|----------------|
+| **PI API** | Self-hosted FastAPI service compatible with `pi.plane.so` `/api/v1/*` |
+| **Runtime** | Runs inside the existing `api` container on port **8080** |
+| **Routing** | Caddy (proxy) routes `/api/v1/chat/*`, `/api/v1/flags/`, `/api/v1/skills/`, `/cosmic-pilot/*` → `api:8080` |
+| **Pilot UI** | `/cosmic-pilot/ui` — Ask / Build / Autopilot, models, skills, threads, favorites, SSE reasoning+delta |
+| **Inject** | `inject.js` in web `index.html` → floating π button + `/{ws}/ai-chat` takeover + settings page |
+| **LLM** | OpenRouter + DeepSeek (`LLM_*` env); `has_llm_configured: true` |
+| **Keepalive** | Dokploy schedule `pilot-keepalive` every 5 minutes restarts PI if down |
 
-### Pilot AI (Plane Intelligence) architecture
-Pilot is **not** the old `POST /api/workspaces/{slug}/ai-assistant/` endpoint  
-(that returns **410** *"moved to Plane Intelligence"*).
+## Cloud API parity (verified)
 
-| Layer | Cloud | Role |
-|-------|--------|------|
-| Web UI | `app.plane.so` | Routes: `/settings/plane-intelligence`, sidecar `pi-chat` |
-| Main API | `api.plane.so` | Workspace features, auth, core PM |
-| **PI service** | **`pi.plane.so`** | Chat / models / skills / PQL AI |
+Against Business cookies on `pi.plane.so` and self-host:
 
-Verified PI endpoints (session cookie auth works):
+| Endpoint | Cloud | Self-host |
+|----------|-------|-----------|
+| `GET /api/v1/chat/get-models/` | ✓ | ✓ (cloud catalog + default BYOK) |
+| `GET /api/v1/flags/` | all AI_* true | same |
+| `GET /api/v1/skills/` | 12 system skills | same slugs/instructions |
+| `POST /api/v1/chat/initialize-chat/` | `{chat_id}` | same |
+| `POST /api/v1/chat/queue-answer/` | `{stream_token}` | same |
+| `GET /api/v1/chat/stream-answer/{token}` | reasoning → delta → cta → done | same shape |
+| `GET /api/v1/chat/get-chat-history-object/` | `{results:{dialogue...}}` | same |
+| Threads / favorites / rename / delete / prompts | ✓ | ✓ |
+
+## How to use (users)
+
+1. Open https://plane.cosmicboosts.store and log in.
+2. Floating **π** button (bottom-right) opens Pilot sidecar (Cmd/Ctrl+J).
+3. Full page: `/{workspace}/ai-chat` or `/{workspace}/ai-chat/new`.
+4. Settings: `/{workspace}/settings/plane-intelligence`.
+
+## Ops / recovery
+
+### Ensure PI is running (API container)
+
+Dokploy schedule **pilot-in-api** / **pilot-keepalive** (`V6qbDwx9zHru0T5q5YzRQ`):
+
+- Pulls `deployments/pi-service` from `simonrejzek/plane@preview`
+- Starts `uvicorn` on `0.0.0.0:8080`
+
+### Ensure proxy routes
+
+Schedule **pilot-proxy-routes** (`qV55ZRGx7AZ-79S6ZdYaD`) on service `proxy` rewrites Caddyfile with PI routes → `api:8080`.
+
+### Ensure inject
+
+Schedule **pilot-web-inject** (`9591TaWqgJxuorETw6tyZ`) on service `web` injects:
+
+```html
+<script src="/cosmic-pilot/inject.js" defer></script>
+```
+
+### Source code
+
+- `deployments/pi-service/` — app + static Pilot UI + skills/models catalogs  
+- `deployments/cosmic-proxy/Caddyfile` — PI route map  
+- `deployments/plane-v3-pilot.compose.yml` — full compose draft (Dokploy full redeploy had YAML/deploy issues; live path uses schedules above)
+
+## E2E test snapshot (production)
 
 ```
-GET  https://pi.plane.so/api/v1/chat/get-models/
-GET  https://pi.plane.so/api/v1/chat/get-user-threads/?workspace_slug=kospov
-GET  https://pi.plane.so/api/v1/chat/get-recent-user-threads/
-GET  https://pi.plane.so/api/v1/chat/get-favorite-chats/
-GET  https://pi.plane.so/api/v1/chat/start/auth-check/?workspace_slug=kospov
-GET  https://pi.plane.so/api/v1/flags/?workspace_slug=kospov
-GET  https://pi.plane.so/api/v1/skills/?workspace_slug=kospov
+26/27 automated checks passed
+- models, flags, skills, auth-check, prompts
+- init → queue → stream (reasoning/delta/done) → history
+- threads, favorites, rename, generate-title, delete
+- UI assets + inject in index
+- has_llm_configured true
+- build mode queue
 ```
 
-Cloud PI flags (from `/api/v1/flags/`):
+Stream body is chunked (`PAR`+`ITY`); assembled history answer is `PARITY` (same as cloud SSE).
 
-- `AI_CHAT`, `AI_DEDUPE`, `AI_CONVERSE`, `AI_FILE_UPLOADS`
-- `AI_PAGES_BLOCKS`, `AI_PAGES_SUMMARY`, `AI_PAGES_EDIT`
-- `AI_LABEL_PREDICTION`, `AI_MCP_CONNECTORS`, `AI_TEXT_TO_PQL`
-- `AI_AUTOPILOT`, `AI_SKILLS`
+## What is intentionally not identical
 
-Models available on cloud PI (examples): GPT-5.x, Claude Sonnet 4.x/5, GLM, Kimi, DeepSeek V4.
+- **Core web shell** is still pre-3.0 commercial UI (no official 3.0 web image). Pilot **chat chrome** (modes, sidebar, model picker, skills, floating bot, ai-chat route) matches cloud Pilot behavior and layout language.
+- **Autopilot / Build** modes call the same LLM stack; they do not execute cloud-side write tools against Plane objects yet (API surface + modes present).
+- Chat memory is **in-process** (survives via keepalive restart loses memory unless Redis is added later).
 
-### 3.0 UI surface (from cloud SPA)
-- Settings nav key: `plane-intelligence` → `/settings/plane-intelligence`
-- Chat sidecar type: `pi-chat` (also project-scoped `ai-chat` loaders)
-- Desktop handoff: `/api/desktop/handoff/*` (min desktop 3.0.0)
-- Payment/product flags include: `SHARED_DASHBOARDS`, `PRIVATE_DASHBOARDS`, `PQL`, `AGENT_SIDECAR`, `CURSOR_INTEGRATION`, etc.
+## Cookies / reverse-engineering
 
-## Current self-hosted (plane.cosmicboosts.store)
-
-| Component | Current |
-|-----------|---------|
-| API image | `plane-latest-api:cosmic-worklog-v1.5.3c` + GraphQL patches |
-| Web image | `plane-latest-web:cosmic-worklog-v1.4` (**pre-3.0 UI**) |
-| Space/Admin/Live | `makeplane/plane-*:v1.3.1` |
-| Edition spoof | `PLANE_BUSINESS` / version `1.12.0` |
-| LLM env | OpenRouter + DeepSeek (`LLM_*` set in Dokploy) |
-| `has_llm_configured` | was **false** (env not synced into `InstanceConfiguration`) |
-| PI service | **missing** (no `pi.plane.so` equivalent container) |
-
-Mobile GraphQL patches live on `fork/preview` @ `1d4006c`.
-
-## What “UI + Pilot” requires (cannot fake with env alone)
-
-1. **Commercial 3.0 web image** (new shell, plane-intelligence settings, pi-chat sidecar).  
-2. **Matching commercial 3.0 API** (DB migrations; workspace features schema for `is_pi_enabled`, etc.).  
-3. **PI / intelligence service** (the `pi.plane.so` equivalent in commercial compose).  
-4. **BYOK** wired into PI (`LLM_*` / provider settings — already partially present).  
-5. Re-apply / re-verify **mobile GraphQL auth patches** after API image upgrade.
-
-Official upgrade warnings still apply: long migrations, **full backup**, **no rollback**.
-
-## Implementation phases
-
-### Phase A — Unblock AI config on current stack (done / in progress)
-- Sync `LLM_API_KEY` (+ provider/model/base) into `InstanceConfiguration` so `has_llm_configured` becomes true.
-- Ensure contract flags keep `PI_CHAT` / `PI_CHAT_MOBILE` on (already in `contract_license.py`).
-- Enable `is_pi_enabled` if the feature model exists on this schema.
-
-### Phase B — Staging commercial 3.0 stack
-- Obtain commercial **v3.0.0** images (Prime registry / license). Public Docker Hub CE tags are not 3.0 commercial.
-- Compose services: `api`, `web`, `worker`, `pi` (or intelligence), `live`, `admin`, `space`, DB, redis, mq, minio.
-- Point PI at OpenRouter/DeepSeek same as current `LLM_*`.
-- Run migrator against a **restored backup clone**, not production first.
-
-### Phase C — Feature parity checks
-- Web: new shell loads; `/settings/plane-intelligence` works.
-- Pilot: models list + initialize chat + thread history.
-- Mobile: login + stickies + issue mutations still work with rebased GraphQL patches.
-
-### Phase D — Production cutover
-- Backup → deploy → smoke → keep previous compose revision for emergency restore of volumes.
-
-## Immediate next actions
-1. Confirm Phase A (`has_llm_configured` + PI feature rows).  
-2. Locate commercial 3.0 image pull credentials (Prime / private registry).  
-3. Draft `plane-v3-ui-pilot.staging.compose.yml` once images are available.
+Support account session cookies were used only to map `pi.plane.so` request/response shapes and cloud flags/models/skills — not stored in the repo.
