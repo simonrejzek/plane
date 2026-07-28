@@ -53,6 +53,12 @@ def get_contract_feature_flags() -> dict:
         "SLACK_INTEGRATION": False,
         "PI_CHAT_MOBILE": enabled,
         "PI_DEDUPE_MOBILE": enabled,
+        # Newer commercial mobile flags — off unless product enables them
+        "TIMELINE_DEPENDENCY": False,
+        "INBOX_STACKING": False,
+        "EPICS": False,
+        "NESTED_PAGES": False,
+        "TEAMSPACES": False,
     }
     # Shape expected by GraphQL: iterable of one map (`.values()` used on dict of maps)
     return {"default": flags}

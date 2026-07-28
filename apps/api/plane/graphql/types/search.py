@@ -16,3 +16,5 @@ class GlobalSearchType:
     modules: list[ModuleLiteType]
     cycles: list[CycleLiteType]
     pages: list[PageLiteType]
+    # Official mobile search; epics not in CE — always empty list
+    epics: list[IssueLiteType]

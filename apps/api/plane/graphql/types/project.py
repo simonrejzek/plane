@@ -131,3 +131,6 @@ class ProjectLiteType:
     id: strawberry.ID
     name: str
     identifier: str
+    # Official mobile global search
+    logo_props: Optional[JSON] = None
+    is_member: bool = True

@@ -31,6 +31,7 @@ async def filter_projects(
     slug: str,
     user,
     project: Optional[strawberry.ID] = None,
+    include_unjoined_projects: Optional[bool] = False,
 ) -> list[ProjectLiteType]:
     if project is not None:
         return []
@@ -40,21 +41,33 @@ async def filter_projects(
     for field in fields:
         q |= Q(**{f"{field}__icontains": query})
 
+    base = Project.objects.filter(
+        q,
+        archived_at__isnull=True,
+        workspace__slug=slug,
+    )
+    if not include_unjoined_projects:
+        base = base.filter(
+            project_projectmember__member=user,
+            project_projectmember__is_active=True,
+        )
+
     projects = await sync_to_async(
         lambda: list(
-            Project.objects.filter(
-                q,
-                project_projectmember__member=user,
-                project_projectmember__is_active=True,
-                archived_at__isnull=True,
-                workspace__slug=slug,
-            )
-            .distinct()
-            .values("id", "name", "identifier")
+            base.distinct().values("id", "name", "identifier", "logo_props")
         )
     )()
 
-    return [ProjectLiteType(**project) for project in projects]
+    return [
+        ProjectLiteType(
+            id=p["id"],
+            name=p["name"],
+            identifier=p["identifier"],
+            logo_props=p.get("logo_props") or {},
+            is_member=True,
+        )
+        for p in projects
+    ]
 
 
 async def filter_issues(
@@ -243,14 +256,22 @@ class GlobalSearchQuery:
         module: Optional[strawberry.ID] = None,
         cycle: Optional[strawberry.ID] = None,
         query: Optional[str] = None,
+        include_unjoined_projects: Optional[bool] = False,
     ) -> GlobalSearchType:
         user = info.context.user
         if not query:
             return GlobalSearchType(
-                projects=[], issues=[], modules=[], cycles=[], pages=[]
+                projects=[],
+                issues=[],
+                modules=[],
+                cycles=[],
+                pages=[],
+                epics=[],
             )
 
-        projects = await filter_projects(query, slug, user, project)
+        projects = await filter_projects(
+            query, slug, user, project, include_unjoined_projects
+        )
         issues = await filter_issues(query, slug, user, project, module, cycle)
         modules = await filter_modules(
             query, slug, user, project, module, cycle
@@ -265,4 +286,5 @@ class GlobalSearchQuery:
             modules=modules,
             cycles=cycles,
             pages=pages,
+            epics=[],
         )

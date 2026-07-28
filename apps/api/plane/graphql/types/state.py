@@ -27,3 +27,8 @@ class StateType:
     @strawberry.field
     def project(self) -> int:
         return self.project_id
+
+    # Official mobile queries `order` (maps to DB sequence)
+    @strawberry.field
+    def order(self) -> float:
+        return float(self.sequence)

@@ -109,6 +109,8 @@ class UserFavoriteEntityData:
     id: Optional[strawberry.ID]
     name: Optional[str]
     logo_props: Optional[JSON]
+    # Official mobile recent-visits query requests this (epics not in CE)
+    is_epic: Optional[bool] = False
 
 
 @strawberry_django.type(UserFavorite)

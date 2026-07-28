@@ -43,3 +43,10 @@ class FeatureFlagType:
     # ====== mobile specific flags ======
     pi_chat_mobile: bool
     pi_dedupe_mobile: bool
+
+    # ====== newer commercial mobile flags (stubbed when unset) ======
+    timeline_dependency: bool = False
+    inbox_stacking: bool = False
+    epics: bool = False
+    nested_pages: bool = False
+    teamspaces: bool = False

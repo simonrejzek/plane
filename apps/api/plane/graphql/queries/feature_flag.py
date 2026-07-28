@@ -116,4 +116,10 @@ class FeatureFlagQuery:
             # ====== mobile specific flags ======
             pi_chat_mobile=feature_flags.get("PI_CHAT_MOBILE", False),
             pi_dedupe_mobile=feature_flags.get("PI_DEDUPE_MOBILE", False),
+            # ====== newer commercial mobile flags ======
+            timeline_dependency=feature_flags.get("TIMELINE_DEPENDENCY", False),
+            inbox_stacking=feature_flags.get("INBOX_STACKING", False),
+            epics=feature_flags.get("EPICS", False),
+            nested_pages=feature_flags.get("NESTED_PAGES", False),
+            teamspaces=feature_flags.get("TEAMSPACES", False),
         )
