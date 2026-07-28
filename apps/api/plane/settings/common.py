@@ -144,12 +144,16 @@ MIDDLEWARE = [
 ]
 
 # Rest Framework settings
+# Official mobile refreshes JWT + session-token in a tight loop after login.
+# The old "30/minute" anon cap returned 429 within seconds and forced logout.
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("rest_framework.authentication.SessionAuthentication",),
     "DEFAULT_THROTTLE_CLASSES": ("rest_framework.throttling.AnonRateThrottle",),
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "30/minute",
+        "anon": os.environ.get("DRF_ANON_RATE_LIMIT", "600/minute"),
+        "user": os.environ.get("DRF_USER_RATE_LIMIT", "1200/minute"),
         "asset_id": "5/minute",
+        "authentication": os.environ.get("AUTHENTICATION_RATE_LIMIT", "120/minute"),
     },
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_RENDERER_CLASSES": ("rest_framework.renderers.JSONRenderer",),
@@ -579,10 +583,13 @@ if ENABLE_DRF_SPECTACULAR:
     from .openapi import SPECTACULAR_SETTINGS  # noqa: F401
 
 # JWT for official mobile app
+# Default access token: 7 days (was 15m) — short tokens + cold-start races cause
+# official mobile to fire stickies/favorites/mutations unauthenticated and look broken.
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(os.environ.get("ACCESS_TOKEN_LIFETIME", 15))),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(os.environ.get("ACCESS_TOKEN_LIFETIME", 10080))),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=int(os.environ.get("REFRESH_TOKEN_LIFETIME", 90))),
-    "ROTATE_REFRESH_TOKENS": True,
+    # Official mobile refreshes often; rotation causes concurrent-token churn/logout loops.
+    "ROTATE_REFRESH_TOKENS": False,
     "BLACKLIST_AFTER_ROTATION": False,
     "ALGORITHM": "HS256",
     "SIGNING_KEY": SECRET_KEY,

@@ -111,6 +111,16 @@ class UserFavoriteEntityData:
     logo_props: Optional[JSON]
     # Official mobile recent-visits query requests this (epics not in CE)
     is_epic: Optional[bool] = False
+    # Official mobile favorites query
+    workitemIdentifier: Optional[str] = None
+
+
+@strawberry.type
+class FavoriteProjectDetails:
+    id: strawberry.ID
+    name: str
+    identifier: str
+    logoProps: Optional[JSON] = None
 
 
 @strawberry_django.type(UserFavorite)
@@ -130,6 +140,22 @@ class UserFavoriteType:
     @strawberry.field
     def project(self) -> int:
         return self.project_id
+
+    @strawberry.field(name="projectDetails")
+    async def project_details(self) -> Optional[FavoriteProjectDetails]:
+        if not getattr(self, "project_id", None):
+            return None
+        project = await sync_to_async(
+            Project.objects.filter(pk=self.project_id).first
+        )()
+        if not project:
+            return None
+        return FavoriteProjectDetails(
+            id=project.id,
+            name=project.name,
+            identifier=project.identifier,
+            logoProps=project.logo_props or {},
+        )
 
     @strawberry.field
     async def entity_data(self) -> Optional[UserFavoriteEntityData]:
@@ -172,11 +198,21 @@ class UserFavoriteType:
         # where entity_identifier is issue id and entity_type is issue
         elif self.entity_identifier and self.entity_type == "issue":
             issue = await sync_to_async(
-                Issue.objects.filter(id=self.entity_identifier).first
+                Issue.objects.filter(id=self.entity_identifier)
+                .select_related("project")
+                .first
             )()
             if issue:
+                ident = None
+                try:
+                    ident = f"{issue.project.identifier}-{issue.sequence_id}"
+                except Exception:
+                    ident = None
                 return UserFavoriteEntityData(
-                    id=issue.id, name=issue.name, logo_props=None
+                    id=issue.id,
+                    name=issue.name,
+                    logo_props=None,
+                    workitemIdentifier=ident,
                 )
             return None
         # where entity_identifier is issue_view id and entity_type is issue_view

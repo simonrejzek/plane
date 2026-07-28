@@ -27,6 +27,9 @@ from plane.authentication.utils.host import base_host
 
 class CSRFTokenEndpoint(APIView):
     permission_classes = [AllowAny]
+    # Official mobile polls CSRF + refresh in a tight loop; default anon
+    # throttle (30/min) 429s this and forces logout.
+    throttle_classes = []
 
     def get(self, request):
         # Generate a CSRF token

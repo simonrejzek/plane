@@ -46,7 +46,15 @@ class NotificationQuery:
         mentioned: Optional[bool] = False,
         cursor: Optional[str] = None,
     ) -> PaginatorResponse[NotificationType]:
-        type_list = type.split(",")
+        # Mobile may send type as "", null, or a comma-separated string
+        if type is None or type == "" or type is False:
+            type_list = ["all"]
+        elif isinstance(type, (list, tuple)):
+            type_list = [str(t) for t in type if t]
+            if not type_list:
+                type_list = ["all"]
+        else:
+            type_list = str(type).split(",")
         q_filters = Q()
         filters = Q(
             workspace__slug=slug,

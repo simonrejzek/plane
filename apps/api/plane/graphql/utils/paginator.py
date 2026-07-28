@@ -20,13 +20,18 @@ class Cursor:
         return f"{self.page_size}:{self.current_page}:{self.offset}"
 
     @classmethod
-    def from_string(self, cursor):
-        cursor_bits = cursor.split(":")
+    def from_string(cls, cursor):
+        if not cursor:
+            return cls()
+        cursor_bits = str(cursor).split(":")
         if len(cursor_bits) != 3:
-            return ValueError("Invalid cursor format")
-        return self(
-            int(cursor_bits[0]), int(cursor_bits[1]), int(cursor_bits[2])
-        )
+            return cls()
+        try:
+            return cls(
+                int(cursor_bits[0]), int(cursor_bits[1]), int(cursor_bits[2])
+            )
+        except (TypeError, ValueError):
+            return cls()
 
 
 def paginate(
@@ -37,8 +42,8 @@ def paginate(
     Paginator Information Results
     """
     cursor_object = Cursor.from_string(cursor)
-    if cursor_object is None:
-        cursor_object = Cursor(0, 0, 0)
+    if cursor_object is None or isinstance(cursor_object, Exception):
+        cursor_object = Cursor()
 
     total_results = len(results_object)
     page_size = min(cursor_object.page_size, PAGINATOR_MAX_LIMIT)

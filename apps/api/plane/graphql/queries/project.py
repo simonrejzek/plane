@@ -237,3 +237,73 @@ class ProjectMembersQuery:
         )
 
         return project_members
+
+    # Official mobile ProjectQuery:
+    # userProjectRoles(slug, project) { projectId role projectRole teamspaceRole }
+    @strawberry.field(
+        name="userProjectRoles",
+        extensions=[
+            PermissionExtension(permissions=[WorkspaceBasePermission()])
+        ],
+    )
+    async def user_project_roles(
+        self,
+        info: Info,
+        slug: str,
+        project: Optional[str] = None,
+    ) -> "UserProjectRoleType":
+        qs = ProjectMember.objects.filter(
+            workspace__slug=slug,
+            member_id=info.context.user.id,
+            is_active=True,
+        )
+        if project:
+            qs = qs.filter(project_id=project)
+        row = await sync_to_async(
+            lambda: qs.values("project_id", "role").first()
+        )()
+        if not row:
+            # Still return a shape the app can read (no membership)
+            return UserProjectRoleType(
+                projectId=project or "",
+                role=0,
+                projectRole=0,
+                teamspaceRole=None,
+            )
+        role = int(row["role"] or 0)
+        return UserProjectRoleType(
+            projectId=str(row["project_id"]),
+            role=role,
+            projectRole=role,
+            teamspaceRole=None,
+        )
+
+    # EE teamspaces not in CE — empty list of member objects
+    # Mobile: teamspaceMembersByProject(slug, project: String!) { id member }
+    @strawberry.field(
+        name="teamspaceMembersByProject",
+        extensions=[
+            PermissionExtension(permissions=[WorkspaceBasePermission()])
+        ],
+    )
+    async def teamspace_members_by_project(
+        self,
+        info: Info,
+        slug: str,
+        project: Optional[str] = None,
+    ) -> list["TeamspaceMemberType"]:
+        return []
+
+
+@strawberry.type
+class UserProjectRoleType:
+    projectId: strawberry.ID
+    role: int
+    projectRole: int
+    teamspaceRole: Optional[int] = None
+
+
+@strawberry.type
+class TeamspaceMemberType:
+    id: strawberry.ID
+    member: Optional[strawberry.ID] = None

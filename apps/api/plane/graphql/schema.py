@@ -52,6 +52,16 @@ from .queries.feature_flag import FeatureFlagQuery
 from .queries.version_check import VersionCheckQuery
 from .queries.license import WorkspaceLicenseQuery
 from .queries.timezone import TimezoneListQuery
+from .queries.sticky import StickyQuery
+from .queries.comment_reaction import (
+    WorkItemCommentReactionQuery,
+    WorkItemCommentReactionMutation,
+)
+from .queries.mobile_pages import (
+    MobileNestedPagesQuery,
+    MobileNestedPagesMutation,
+    InitiativesCountQuery,
+)
 
 # mutations
 from .mutations.workspace import WorkspaceMutation, WorkspaceInviteMutation
@@ -91,6 +101,8 @@ from .mutations.issues import (
     SubIssueMutation,
 )
 from .mutations.device import DeviceInformationMutation
+from .mutations.sticky import StickyMutation
+from .mutations.mobile_issue_v2 import MobileIssueV2Mutation
 
 
 # combined query class for all
@@ -144,6 +156,10 @@ class Query(
     WorkspacePageQuery,
     WorkspaceLicenseQuery,
     TimezoneListQuery,
+    StickyQuery,
+    WorkItemCommentReactionQuery,
+    MobileNestedPagesQuery,
+    InitiativesCountQuery,
 ):
     pass
 
@@ -177,6 +193,10 @@ class Mutation(
     PageMutation,
     DeviceInformationMutation,
     WorkspacePageMutation,
+    StickyMutation,
+    MobileIssueV2Mutation,
+    WorkItemCommentReactionMutation,
+    MobileNestedPagesMutation,
 ):
     pass
 

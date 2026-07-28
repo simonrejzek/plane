@@ -20,7 +20,8 @@ from plane.authentication.adapter.error import (
 class AuthenticationThrottle(AnonRateThrottle):
     # Rate is configurable per-deployment via the AUTHENTICATION_RATE_LIMIT
     # env var (DRF format: "<num>/<period>" where period is second/minute/hour/day).
-    rate = os.environ.get("AUTHENTICATION_RATE_LIMIT", "10/minute")
+    # Official mobile needs headroom (csrf + refresh + session-token after login).
+    rate = os.environ.get("AUTHENTICATION_RATE_LIMIT", "120/minute")
     scope = "authentication"
 
     def throttle_failure_view(self, request, *args, **kwargs):

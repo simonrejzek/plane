@@ -86,6 +86,42 @@ class UserFavoritesQuery:
 
         return favorites
 
+    # Official mobile FavoritesQuery alias
+    @strawberry.field(
+        name="favorites",
+        extensions=[
+            PermissionExtension(permissions=[WorkspaceBasePermission()])
+        ],
+    )
+    async def favorites(
+        self,
+        info: Info,
+        slug: str,
+        limit: Optional[int] = None,
+    ) -> list[UserFavoriteType]:
+        favorites = await sync_to_async(list)(
+            UserFavorite.objects.filter(
+                user=info.context.user,
+                workspace__slug=slug,
+            )
+            .filter(
+                Q(parent__isnull=True),
+                Q(project__isnull=True)
+                | (
+                    Q(project__isnull=False)
+                    & Q(
+                        project__project_projectmember__member=info.context.user
+                    )
+                    & Q(project__project_projectmember__is_active=True)
+                ),
+                ~Q(entity_type="view"),
+            )
+            .order_by("-created_at")
+        )
+        if limit:
+            favorites = favorites[:limit]
+        return favorites
+
 
 # user recent visits
 @strawberry.type

@@ -81,6 +81,37 @@ class WorkspacePageQuery:
 
         return page_result
 
+    # Official mobile workspace pages list (plural)
+    @strawberry.field(
+        name="workspacePages",
+        extensions=[
+            PermissionExtension(permissions=[WorkspaceBasePermission()])
+        ],
+    )
+    async def workspace_pages(
+        self,
+        info: Info,
+        slug: str,
+        cursor: Optional[str] = None,
+    ) -> PaginatorResponse[PageType]:
+        user = info.context.user
+        subquery = UserFavorite.objects.filter(
+            user=user,
+            entity_type="page",
+            entity_identifier=OuterRef("pk"),
+            workspace__slug=slug,
+        )
+        pages = await sync_to_async(list)(
+            Page.objects.filter(workspace__slug=slug)
+            .filter(parent__isnull=True)
+            .filter(Q(owned_by=user) | Q(access=0))
+            .select_related("workspace", "owned_by")
+            .prefetch_related("projects")
+            .annotate(is_favorite=Exists(subquery))
+            .order_by("-updated_at")
+        )
+        return paginate(results_object=pages, cursor=cursor)
+
 
 # project level queries
 @strawberry.type

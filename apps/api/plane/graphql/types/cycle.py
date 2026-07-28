@@ -69,6 +69,30 @@ class CycleType:
         )()
         return completed_issues
 
+    # Official mobile: status CURRENT | UPCOMING | COMPLETED | DRAFT
+    @strawberry.field
+    def status(self) -> str:
+        from datetime import date as date_cls, datetime as datetime_cls
+
+        today = date_cls.today()
+
+        def as_date(value):
+            if value is None:
+                return None
+            if isinstance(value, datetime_cls):
+                return value.date()
+            return value
+
+        start = as_date(self.start_date)
+        end = as_date(self.end_date)
+        if start is None and end is None:
+            return "DRAFT"
+        if end is not None and end < today:
+            return "COMPLETED"
+        if start is not None and start > today:
+            return "UPCOMING"
+        return "CURRENT"
+
     @strawberry.field
     async def assignees_count(self) -> int:
         issue_assignees_count = await sync_to_async(

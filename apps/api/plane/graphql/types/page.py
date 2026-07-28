@@ -20,8 +20,6 @@ class PageType:
     id: strawberry.ID
     parent: Optional[strawberry.ID]
     name: str
-    description: Optional[JSON]
-    description_html: Optional[str]
     description_stripped: Optional[str]
     description_binary: Optional[str]
     workspace: strawberry.ID
@@ -61,6 +59,39 @@ class PageType:
     async def projects(self) -> list[strawberry.ID]:
         projects = await sync_to_async(list)(self.projects.all())
         return [project.id for project in projects]
+
+    # CE Page model uses description_json (not description)
+    @strawberry.field
+    def description(self) -> Optional[JSON]:
+        value = self.__dict__.get("description_json")
+        if value is None:
+            value = self.__dict__.get("description")
+        return value if value is not None else {}
+
+    @strawberry.field(name="descriptionHtml")
+    def description_html_field(self) -> Optional[str]:
+        return self.__dict__.get("description_html") or "<p></p>"
+
+    @strawberry.field(name="deletedAt")
+    def deleted_at_field(self) -> Optional[datetime]:
+        return self.__dict__.get("deleted_at")
+
+    @strawberry.field(name="isDescriptionEmpty")
+    def is_description_empty(self) -> bool:
+        html = (self.__dict__.get("description_html") or "").strip()
+        if not html or html in ("<p></p>", "<p><br></p>", "<p><br/></p>"):
+            return True
+        # strip simple tags for emptiness check
+        text = (
+            html.replace("<p>", "")
+            .replace("</p>", "")
+            .replace("<br>", "")
+            .replace("<br/>", "")
+            .replace("<br />", "")
+            .replace("&nbsp;", "")
+            .strip()
+        )
+        return len(text) == 0
 
     # @strawberry.field
     # async def labels(self) -> list[strawberry.ID]:

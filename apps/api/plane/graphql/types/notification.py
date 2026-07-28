@@ -41,3 +41,9 @@ class NotificationType:
     @strawberry.field
     def receiver(self) -> int:
         return self.receiver_id
+
+    # Official mobile NotificationsQuery
+    @strawberry.field(name="isMentionedNotification")
+    def is_mentioned_notification(self) -> bool:
+        sender = (self.sender or "").lower()
+        return "mentioned" in sender or "mention" in sender

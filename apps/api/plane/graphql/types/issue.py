@@ -43,16 +43,17 @@ class IssuesInformationType:
 class IssuesType:
     id: strawberry.ID
     workspace: strawberry.ID
+    # Official mobile WorkspaceIssuesQuery uses bare ID scalars for project/state
     project: strawberry.ID
     parent: Optional[strawberry.ID]
-    state: strawberry.ID
+    # Must be optional: some issues have null state_id
+    state: Optional[strawberry.ID]
     point: Optional[int]
     estimate_point: Optional[strawberry.ID]
     name: str
-    description: Optional[JSON]
+    # CE model field is description_json (not description) — resolved below
     description_html: Optional[str]
     description_stripped: Optional[str]
-    description_binary: Optional[str]
     priority: str
     start_date: Optional[date]
     target_date: Optional[date]
@@ -73,28 +74,49 @@ class IssuesType:
     project_identifier: Optional[str]
 
     @strawberry.field
-    def state(self) -> int:
-        return self.state_id
+    def state(self) -> Optional[strawberry.ID]:
+        return str(self.state_id) if getattr(self, "state_id", None) else None
 
     @strawberry.field
-    def parent(self) -> int:
-        return self.parent_id
+    def parent(self) -> Optional[strawberry.ID]:
+        return str(self.parent_id) if getattr(self, "parent_id", None) else None
 
     @strawberry.field
-    def project(self) -> int:
-        return self.project_id
+    def project(self) -> Optional[strawberry.ID]:
+        return str(self.project_id) if getattr(self, "project_id", None) else None
 
     @strawberry.field
-    def workspace(self) -> int:
-        return self.workspace_id
+    def workspace(self) -> Optional[strawberry.ID]:
+        return str(self.workspace_id) if getattr(self, "workspace_id", None) else None
 
     @strawberry.field
-    def estimate_point(self) -> int:
-        return self.estimate_point_id
+    def estimate_point(self) -> Optional[strawberry.ID]:
+        return (
+            str(self.estimate_point_id)
+            if getattr(self, "estimate_point_id", None)
+            else None
+        )
 
     @strawberry.field
-    def type(self) -> int:
-        return self.type_id
+    def type(self) -> Optional[strawberry.ID]:
+        return str(self.type_id) if getattr(self, "type_id", None) else None
+
+    # CE Issue uses description_json, not description
+    @strawberry.field
+    def description(self) -> Optional[JSON]:
+        value = getattr(self, "description_json", None)
+        if value is None:
+            value = getattr(self, "description", None)
+        return value if value is not None else {}
+
+    @strawberry.field(name="descriptionHtml")
+    def description_html_field(self) -> Optional[str]:
+        return getattr(self, "description_html", None) or "<p></p>"
+
+    @strawberry.field(name="descriptionBinary")
+    def description_binary_field(self) -> Optional[str]:
+        # BinaryField is not useful to mobile GraphQL clients
+        return None
 
     @strawberry.field
     async def assignees(self) -> Optional[list[strawberry.ID]]:
@@ -119,7 +141,7 @@ class IssuesType:
         return [str(label_id) for label_id in label_ids]
 
     @strawberry.field
-    async def cycle(self, info: Info) -> strawberry.ID:
+    async def cycle(self, info: Info) -> Optional[strawberry.ID]:
         cycle_issue = await sync_to_async(
             CycleIssue.objects.filter(issue_id=self.id).first
         )()
@@ -141,17 +163,68 @@ class IssuesType:
         # Return the module IDs as strings
         return [str(module_id) for module_id in module_issues]
 
-    @strawberry_django.field
+    @strawberry.field
     def project_identifier(self) -> Optional[str]:
-        return self.project.identifier
+        project = getattr(self, "project", None)
+        if project is not None and hasattr(project, "identifier"):
+            return project.identifier
+        project_id = getattr(self, "project_id", None)
+        if not project_id:
+            return None
+        from plane.db.models import Project
 
-    @strawberry_django.field
+        try:
+            return Project.objects.filter(pk=project_id).values_list(
+                "identifier", flat=True
+            ).first()
+        except Exception:
+            return None
+
+    @strawberry.field
     def parent_project_id(self) -> Optional[str]:
-        return self.parent.project.id if self.parent else None
+        parent = getattr(self, "parent", None)
+        if parent is not None and getattr(parent, "project_id", None):
+            return str(parent.project_id)
+        return None
 
-    @strawberry_django.field
+    @strawberry.field
     def parent_project_identifier(self) -> Optional[str]:
-        return self.parent.project.identifier if self.parent else None
+        parent = getattr(self, "parent", None)
+        if parent is None:
+            return None
+        project = getattr(parent, "project", None)
+        if project is not None and hasattr(project, "identifier"):
+            return project.identifier
+        return None
+
+    # Official mobile IssuesQuery / workspaceIssues — epics not in CE
+    @strawberry.field(name="parentIsEpic")
+    def parent_is_epic(self) -> bool:
+        return False
+
+    @strawberry.field(name="isEpic")
+    def is_epic(self) -> bool:
+        return False
+
+    # Official mobile issueRelation nested analytics counters
+    @strawberry.field
+    def analytics(self) -> Optional["IssueAnalyticsType"]:
+        return IssueAnalyticsType(
+            backlog=0,
+            unstarted=0,
+            started=0,
+            completed=0,
+            cancelled=0,
+        )
+
+
+@strawberry.type
+class IssueAnalyticsType:
+    backlog: int = 0
+    unstarted: int = 0
+    started: int = 0
+    completed: int = 0
+    cancelled: int = 0
 
 
 @strawberry_django.type(ProjectUserProperty)

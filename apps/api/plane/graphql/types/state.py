@@ -32,3 +32,16 @@ class StateType:
     @strawberry.field
     def order(self) -> float:
         return float(self.sequence)
+
+
+@strawberry_django.type(State)
+class StateLiteType:
+    id: strawberry.ID
+    name: str
+    color: str
+    group: str
+    sequence: float
+
+    @strawberry.field
+    def order(self) -> float:
+        return float(self.sequence)

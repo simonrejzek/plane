@@ -59,19 +59,32 @@ class PageMutation:
         project: strawberry.ID,
         name: str,
         description_html: Optional[str] = "",
+        descriptionHtml: Optional[str] = None,
+        description: Optional[JSON] = None,
         logo_props: Optional[JSON] = {},
+        logoProps: Optional[JSON] = None,
         access: int = 2,
     ) -> PageType:
         workspace = await sync_to_async(Workspace.objects.get)(slug=slug)
         project_details = await sync_to_async(Project.objects.get)(id=project)
-        page = await sync_to_async(Page.objects.create)(
+        html = (
+            descriptionHtml
+            if descriptionHtml is not None
+            else (description_html if description_html is not None else "<p></p>")
+        )
+        props = logoProps if logoProps is not None else (logo_props or {})
+        create_kwargs = dict(
             workspace=workspace,
             name=name,
-            description_html=description_html,
-            logo_props=logo_props,
+            description_html=html or "<p></p>",
+            logo_props=props,
             access=access,
             owned_by=info.context.user,
         )
+        # CE model field is description_json
+        if description is not None:
+            create_kwargs["description_json"] = description
+        page = await sync_to_async(Page.objects.create)(**create_kwargs)
 
         _ = await sync_to_async(ProjectPage.objects.create)(
             workspace=workspace,
