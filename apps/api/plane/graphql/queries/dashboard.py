@@ -52,6 +52,7 @@ class userInformationQuery:
 
         return UserInformationType(
             user=info.context.user,
+            profile=profile,
             workspace=workspace,
             device_info=device_information,
         )

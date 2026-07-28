@@ -1,0 +1,290 @@
+# Plane: GraphQL mobile owner scalar + userInformation.profile v1.5.3g + version 1.12.0
+x-db-env: &db-env
+  PGHOST: ${PGHOST:-plane-db}
+  PGDATABASE: ${PGDATABASE:-plane}
+  POSTGRES_USER: ${POSTGRES_USER:-plane}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-plane}
+  POSTGRES_DB: ${POSTGRES_DB:-plane}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  PGDATA: ${PGDATA:-/var/lib/postgresql/data}
+
+x-redis-env: &redis-env
+  REDIS_HOST: ${REDIS_HOST:-plane-redis}
+  REDIS_PORT: ${REDIS_PORT:-6379}
+  REDIS_URL: ${REDIS_URL:-redis://plane-redis:6379/}
+
+x-minio-env: &minio-env
+  MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-access-key}
+  MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-secret-key}
+
+x-aws-s3-env: &aws-s3-env
+  AWS_REGION: ${AWS_REGION:-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-access-key}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-secret-key}
+  AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-http://plane-minio:9000}
+  AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-uploads}
+
+x-proxy-env: &proxy-env
+  APP_DOMAIN: ${APP_DOMAIN:-localhost}
+  FILE_SIZE_LIMIT: ${FILE_SIZE_LIMIT:-5242880}
+  BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-uploads}
+  SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-0.0.0.0/0}
+
+x-live-env: &live-env
+  API_BASE_URL: ${API_BASE_URL:-http://api:8000}
+  LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY:-dev-only-change-me}
+
+x-app-env: &app-env
+  APP_DOMAIN: ${APP_DOMAIN:-}
+  APP_BASE_URL: ${APP_BASE_URL:-}
+  WEB_URL: ${WEB_URL:-http://localhost}
+  DEBUG: ${DEBUG:-0}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost}
+  GUNICORN_WORKERS: ${GUNICORN_WORKERS:-1}
+  USE_MINIO: ${USE_MINIO:-1}
+  DATABASE_URL: ${DATABASE_URL:-postgresql://plane:plane@plane-db/plane}
+  SECRET_KEY: ${SECRET_KEY:-dev-only-change-me}
+  AMQP_URL: ${AMQP_URL:-amqp://plane:plane@plane-mq:5672/plane}
+  API_KEY_RATE_LIMIT: ${API_KEY_RATE_LIMIT:-60/minute}
+  MINIO_ENDPOINT_SSL: ${MINIO_ENDPOINT_SSL:-0}
+  LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY:-dev-only-change-me}
+  WEBHOOK_ALLOWED_IPS: ${WEBHOOK_ALLOWED_IPS:-}
+  WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
+  CONTRACT_LICENSE_ENABLED: ${CONTRACT_LICENSE_ENABLED:-1}
+  CONTRACT_LICENSE_EDITION: ${CONTRACT_LICENSE_EDITION:-PLANE_BUSINESS}
+  APP_VERSION: ${APP_VERSION:-1.12.0}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_PROVIDER: ${LLM_PROVIDER:-custom}
+  LLM_MODEL: ${LLM_MODEL:-}
+  LLM_BASE_URL: ${LLM_BASE_URL:-}
+  LLM_ALLOW_CUSTOM_MODEL: ${LLM_ALLOW_CUSTOM_MODEL:-1}
+
+services:
+  plane-db:
+    image: postgres:15.7-alpine
+    restart: always
+    command: postgres -c 'max_connections=1000'
+    environment:
+      <<: *db-env
+    volumes:
+      - pgdata_latest:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-plane} -d ${POSTGRES_DB:-plane}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  plane-redis:
+    image: valkey/valkey:7.2.11-alpine
+    restart: always
+    volumes:
+      - redisdata_latest:/data
+
+  plane-mq:
+    image: rabbitmq:3.13.6-management-alpine
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-plane}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-plane}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-plane}
+    volumes:
+      - rabbitmq_data_latest:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  plane-minio:
+    image: minio/minio:latest
+    restart: always
+    command: server /export --console-address ":9090"
+    environment:
+      <<: *minio-env
+    volumes:
+      - uploads_latest:/export
+
+  migrator:
+    image: plane-latest-api:cosmic-worklog-v1.5.3c
+    restart: "no"
+    command: ./bin/docker-entrypoint-migrator.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_started
+
+  bootstrap:
+    image: plane-latest-api:cosmic-worklog-v1.5.3c
+    restart: "no"
+    command:
+      - python
+      - manage.py
+      - shell
+      - -c
+      - |
+        import os
+        from django.core.cache import cache
+        from plane.db.models import Profile, Project
+        from plane.license.models import Instance
+        domain = os.environ.get("APP_DOMAIN", "").strip()
+        app_version = (os.environ.get("APP_VERSION") or "1.12.0").strip().lstrip("v")
+        inst = Instance.objects.first()
+        if inst:
+            fields = []
+            if domain and inst.domain != domain:
+                inst.domain = domain
+                fields.append("domain")
+            if os.environ.get("CONTRACT_LICENSE_ENABLED", "0") == "1":
+                if getattr(inst, "is_telemetry_enabled", False):
+                    inst.is_telemetry_enabled = False
+                    fields.append("is_telemetry_enabled")
+                edition = os.environ.get("CONTRACT_LICENSE_EDITION", "PLANE_BUSINESS")
+                if hasattr(inst, "edition") and inst.edition != edition:
+                    inst.edition = edition
+                    fields.append("edition")
+            if inst.current_version != app_version:
+                inst.current_version = app_version
+                fields.append("current_version")
+            if inst.latest_version != app_version:
+                inst.latest_version = app_version
+                fields.append("latest_version")
+            if getattr(inst, "is_current_version_deprecated", False):
+                inst.is_current_version_deprecated = False
+                fields.append("is_current_version_deprecated")
+            if fields:
+                inst.save(update_fields=fields)
+                print("instance_updated", ",".join(fields), "version", app_version)
+            else:
+                print("instance_ok", "version", app_version)
+        n = Project.objects.filter(is_time_tracking_enabled=False).update(is_time_tracking_enabled=True)
+        print("time_tracking_enabled", n)
+        onboarded = Profile.objects.filter(is_onboarded=False).update(is_onboarded=True)
+        print("profiles_onboarded", onboarded)
+        from plane.db.models import User as PlaneUser
+        PlaneUser.objects.filter(is_email_verified=False).update(is_email_verified=True)
+        print("emails_verified")
+        desired = {"workspace_join": True, "profile_complete": True, "workspace_create": True}
+        for pr in Profile.objects.all():
+            pr.is_mobile_onboarded = True
+            pr.mobile_onboarding_step = desired
+            pr.is_onboarded = True
+            pr.save(update_fields=["is_mobile_onboarded", "mobile_onboarding_step", "is_onboarded"])
+        print("profiles_mobile_complete", Profile.objects.count())
+        if inst and not getattr(inst, "is_verified", True):
+            inst.is_verified = True
+            inst.save(update_fields=["is_verified"])
+            print("instance_verified")
+        try:
+            cache.clear()
+            print("cache_cleared")
+        except Exception as e:
+            print("cache_clear_err", e)
+    environment:
+      <<: [*app-env, *db-env, *redis-env]
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+
+
+  api:
+    image: plane-latest-api:cosmic-worklog-v1.5.3c
+    restart: always
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        echo CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAppbXBvcnQgcmUKCiMgMSkgV29ya3NwYWNlLm93bmVyIG11c3QgYmUgc2NhbGFyIElEIChvZmZpY2lhbCBtb2JpbGUgcXVlcmllcyBiYXJlIGBvd25lcmApCndzID0gUGF0aCgiL2NvZGUvcGxhbmUvZ3JhcGhxbC90eXBlcy93b3Jrc3BhY2UucHkiKQp3dCA9IHdzLnJlYWRfdGV4dCgpCmlmICJkZWYgb3duZXIoc2VsZikiIGluIHd0IGFuZCAib3duZXI6IHN0cmF3YmVycnkuSUQiIGluIHd0IGFuZCAiVXNlclR5cGUiIG5vdCBpbiB3dC5zcGxpdCgiY2xhc3MgV29ya3NwYWNlVHlwZSIpWzFdLnNwbGl0KCJjbGFzcyAiKVswXToKICAgIHByaW50KCJ3b3Jrc3BhY2Utb3duZXItc2NhbGFyLW9rIikKZWxzZToKICAgICMgTm9ybWFsaXplIFdvcmtzcGFjZVR5cGUgb3duZXIgYmxvY2sKICAgICMgUmVwbGFjZSBvd25lcjogVXNlclR5cGUgd2l0aCBzY2FsYXIgKyBtZXRob2QKICAgIHNlY3Rpb24gPSB3dAogICAgaWYgIm93bmVyOiBVc2VyVHlwZSIgaW4gd3Q6CiAgICAgICAgd3QgPSB3dC5yZXBsYWNlKCIgICAgb3duZXI6IFVzZXJUeXBlXG4iLCAiICAgIG93bmVyOiBzdHJhd2JlcnJ5LklEXG4iLCAxKQogICAgaWYgImRlZiBvd25lcihzZWxmKSIgbm90IGluIHd0OgogICAgICAgICMgaW5zZXJ0IG93bmVyIG1ldGhvZCBiZWZvcmUgcm9sZSBmaWVsZAogICAgICAgIHd0ID0gd3QucmVwbGFjZSgKICAgICAgICAgICAgIiAgICBAc3RyYXdiZXJyeV9kamFuZ28uZmllbGRcbiAgICBhc3luYyBkZWYgcm9sZShzZWxmLCBpbmZvOiBJbmZvKSAtPiBPcHRpb25hbFtpbnRdOiIsCiAgICAgICAgICAgICIgICAgQHN0cmF3YmVycnkuZmllbGRcbiAgICBkZWYgb3duZXIoc2VsZikgLT4gc3RyYXdiZXJyeS5JRDpcbiAgICAgICAgcmV0dXJuIHNlbGYub3duZXJfaWRcblxuICAgIEBzdHJhd2JlcnJ5X2RqYW5nby5maWVsZFxuICAgIGFzeW5jIGRlZiByb2xlKHNlbGYsIGluZm86IEluZm8pIC0+IE9wdGlvbmFsW2ludF06IiwKICAgICAgICAgICAgMSwKICAgICAgICApCiAgICAjIHJlbW92ZSByZWxhdGlvbiBjb21tZW50IGxlZnRvdmVycyAvIHdyb25nIG1ldGhvZHMgcmV0dXJuaW5nIFVzZXIKICAgICMgZW5zdXJlIG93bmVyIG1ldGhvZCByZXR1cm5zIG93bmVyX2lkIG5vdCBuZXN0ZWQKICAgIGlmICJyZXR1cm4gc2VsZi5vd25lcl9pZCIgbm90IGluIHd0OgogICAgICAgICMgaWYgb3duZXIgbWV0aG9kIGV4aXN0cyB3aXRoIGludCByZXR1cm4sIHVwZ3JhZGUgdG8gSUQKICAgICAgICB3dCA9IHJlLnN1YigKICAgICAgICAgICAgciIgICAgQHN0cmF3YmVycnlcLmZpZWxkXG4gICAgZGVmIG93bmVyXChzZWxmXCkgLT4gaW50OlxuICAgICAgICByZXR1cm4gc2VsZlwub3duZXJfaWRcbiIsCiAgICAgICAgICAgICIgICAgQHN0cmF3YmVycnkuZmllbGRcbiAgICBkZWYgb3duZXIoc2VsZikgLT4gc3RyYXdiZXJyeS5JRDpcbiAgICAgICAgcmV0dXJuIHNlbGYub3duZXJfaWRcbiIsCiAgICAgICAgICAgIHd0LAogICAgICAgICAgICBjb3VudD0xLAogICAgICAgICkKICAgIGlmICJyZXR1cm4gc3RyKHdvcmtzcGFjZV9tZW1iZXIucm9sZSkiIGluIHd0OgogICAgICAgIHd0ID0gd3QucmVwbGFjZSgicmV0dXJuIHN0cih3b3Jrc3BhY2VfbWVtYmVyLnJvbGUpIiwgInJldHVybiBpbnQod29ya3NwYWNlX21lbWJlci5yb2xlKSIpCiAgICB3cy53cml0ZV90ZXh0KHd0KQogICAgcHJpbnQoInBhdGNoZWQtd29ya3NwYWNlLW93bmVyLXNjYWxhciIpCgojIDIpIFVzZXJJbmZvcm1hdGlvblR5cGUucHJvZmlsZQpkYXNoID0gUGF0aCgiL2NvZGUvcGxhbmUvZ3JhcGhxbC90eXBlcy9kYXNoYm9hcmQucHkiKQpkdCA9IGRhc2gucmVhZF90ZXh0KCkKaWYgInByb2ZpbGU6IiBpbiBkdCBhbmQgIlByb2ZpbGVUeXBlIiBpbiBkdDoKICAgIHByaW50KCJ1c2VyaW5mby1wcm9maWxlLXR5cGUtb2siKQplbHNlOgogICAgaWYgImZyb20gcGxhbmUuZ3JhcGhxbC50eXBlcy51c2VycyBpbXBvcnQgVXNlclR5cGUiIGluIGR0IGFuZCAiUHJvZmlsZVR5cGUiIG5vdCBpbiBkdDoKICAgICAgICBkdCA9IGR0LnJlcGxhY2UoCiAgICAgICAgICAgICJmcm9tIHBsYW5lLmdyYXBocWwudHlwZXMudXNlcnMgaW1wb3J0IFVzZXJUeXBlIiwKICAgICAgICAgICAgImZyb20gcGxhbmUuZ3JhcGhxbC50eXBlcy51c2VycyBpbXBvcnQgVXNlclR5cGUsIFByb2ZpbGVUeXBlIiwKICAgICAgICApCiAgICBpZiAicHJvZmlsZToiIG5vdCBpbiBkdDoKICAgICAgICBkdCA9IGR0LnJlcGxhY2UoCiAgICAgICAgICAgICJjbGFzcyBVc2VySW5mb3JtYXRpb25UeXBlOlxuICAgIHVzZXI6IFVzZXJUeXBlXG4gICAgd29ya3NwYWNlOiBPcHRpb25hbFtXb3Jrc3BhY2VUeXBlXVxuICAgIGRldmljZV9pbmZvOiBPcHRpb25hbFtEZXZpY2VJbmZvcm1hdGlvblR5cGVdXG4iLAogICAgICAgICAgICAiY2xhc3MgVXNlckluZm9ybWF0aW9uVHlwZTpcbiAgICB1c2VyOiBVc2VyVHlwZVxuICAgIHByb2ZpbGU6IE9wdGlvbmFsW1Byb2ZpbGVUeXBlXVxuICAgIHdvcmtzcGFjZTogT3B0aW9uYWxbV29ya3NwYWNlVHlwZV1cbiAgICBkZXZpY2VfaW5mbzogT3B0aW9uYWxbRGV2aWNlSW5mb3JtYXRpb25UeXBlXVxuIiwKICAgICAgICApCiAgICBpZiAicHJvZmlsZToiIG5vdCBpbiBkdDoKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KCJmYWlsZWQgdG8gYWRkIHByb2ZpbGUgdG8gVXNlckluZm9ybWF0aW9uVHlwZTogIiArIGR0KQogICAgZGFzaC53cml0ZV90ZXh0KGR0KQogICAgcHJpbnQoInBhdGNoZWQtdXNlcmluZm8tcHJvZmlsZS10eXBlIikKCiMgMykgdXNlckluZm9ybWF0aW9uIHF1ZXJ5IHJldHVybnMgcHJvZmlsZT0KcSA9IFBhdGgoIi9jb2RlL3BsYW5lL2dyYXBocWwvcXVlcmllcy9kYXNoYm9hcmQucHkiKQpxdCA9IHEucmVhZF90ZXh0KCkKaWYgInByb2ZpbGU9cHJvZmlsZSIgaW4gcXQ6CiAgICBwcmludCgidXNlcmluZm8tcXVlcnktcHJvZmlsZS1vayIpCmVsc2U6CiAgICBvbGQgPSAoCiAgICAgICAgIiAgICAgICAgcmV0dXJuIFVzZXJJbmZvcm1hdGlvblR5cGUoXG4iCiAgICAgICAgIiAgICAgICAgICAgIHVzZXI9aW5mby5jb250ZXh0LnVzZXIsXG4iCiAgICAgICAgIiAgICAgICAgICAgIHdvcmtzcGFjZT13b3Jrc3BhY2UsXG4iCiAgICAgICAgIiAgICAgICAgICAgIGRldmljZV9pbmZvPWRldmljZV9pbmZvcm1hdGlvbixcbiIKICAgICAgICAiICAgICAgICApIgogICAgKQogICAgbmV3ID0gKAogICAgICAgICIgICAgICAgIHJldHVybiBVc2VySW5mb3JtYXRpb25UeXBlKFxuIgogICAgICAgICIgICAgICAgICAgICB1c2VyPWluZm8uY29udGV4dC51c2VyLFxuIgogICAgICAgICIgICAgICAgICAgICBwcm9maWxlPXByb2ZpbGUsXG4iCiAgICAgICAgIiAgICAgICAgICAgIHdvcmtzcGFjZT13b3Jrc3BhY2UsXG4iCiAgICAgICAgIiAgICAgICAgICAgIGRldmljZV9pbmZvPWRldmljZV9pbmZvcm1hdGlvbixcbiIKICAgICAgICAiICAgICAgICApIgogICAgKQogICAgaWYgb2xkIG5vdCBpbiBxdDoKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KCJ1c2VySW5mb3JtYXRpb24gcmV0dXJuIGJsb2NrIG1pc3NpbmciKQogICAgcS53cml0ZV90ZXh0KHF0LnJlcGxhY2Uob2xkLCBuZXcsIDEpKQogICAgcHJpbnQoInBhdGNoZWQtdXNlcmluZm8tcXVlcnktcHJvZmlsZSIpCgojIEtlZXAgcHJpb3IgbW9iaWxlIHByb2ZpbGUgZmllbGRzIGlmIG1pc3NpbmcKdXNlcnMgPSBQYXRoKCIvY29kZS9wbGFuZS9ncmFwaHFsL3R5cGVzL3VzZXJzLnB5IikKdXQgPSB1c2Vycy5yZWFkX3RleHQoKQppZiAiaXNfbW9iaWxlX29uYm9hcmRlZCIgbm90IGluIHV0OgogICAgb2xkID0gKAogICAgICAgICIgICAgbGFzdF93b3Jrc3BhY2VfaWQ6IE9wdGlvbmFsW3N0cmF3YmVycnkuSURdXG4iCiAgICAgICAgIiAgICBiaWxsaW5nX2FkZHJlc3NfY291bnRyeTogSlNPTlxuIgogICAgICAgICIgICAgYmlsbGluZ19hZGRyZXNzOiBPcHRpb25hbFtzdHJdXG4iCiAgICAgICAgIiAgICBoYXNfYmlsbGluZ19hZGRyZXNzOiBib29sXG4iCiAgICAgICAgIiAgICBjb21wYW55X25hbWU6IHN0clxuIgogICAgKQogICAgbmV3ID0gKAogICAgICAgICIgICAgbGFzdF93b3Jrc3BhY2VfaWQ6IE9wdGlvbmFsW3N0cmF3YmVycnkuSURdXG4iCiAgICAgICAgIiAgICBiaWxsaW5nX2FkZHJlc3NfY291bnRyeTogT3B0aW9uYWxbc3RyXVxuIgogICAgICAgICIgICAgYmlsbGluZ19hZGRyZXNzOiBPcHRpb25hbFtKU09OXVxuIgogICAgICAgICIgICAgaGFzX2JpbGxpbmdfYWRkcmVzczogYm9vbFxuIgogICAgICAgICIgICAgY29tcGFueV9uYW1lOiBzdHJcbiIKICAgICAgICAiICAgIGlzX21vYmlsZV9vbmJvYXJkZWQ6IGJvb2xcbiIKICAgICAgICAiICAgIG1vYmlsZV9vbmJvYXJkaW5nX3N0ZXA6IEpTT05cbiIKICAgICAgICAiICAgIG1vYmlsZV90aW1lem9uZV9hdXRvX3NldDogYm9vbFxuIgogICAgICAgICIgICAgbGFuZ3VhZ2U6IHN0clxuIgogICAgKQogICAgaWYgb2xkIGluIHV0OgogICAgICAgIHV0ID0gdXQucmVwbGFjZShvbGQsIG5ldywgMSkKICAgICAgICB1c2Vycy53cml0ZV90ZXh0KHV0KQogICAgICAgIHByaW50KCJwYXRjaGVkLXByb2ZpbGUtbW9iaWxlLWZpZWxkcyIpCmVsc2U6CiAgICBwcmludCgicHJvZmlsZS1tb2JpbGUtZmllbGRzLW9rIikKCiMgdXJscyBuby1zbGFzaAp1cmxzID0gUGF0aCgiL2NvZGUvcGxhbmUvdXJscy5weSIpCnQgPSB1cmxzLnJlYWRfdGV4dCgpCmlmICdwYXRoKCJncmFwaHFsIiwgaW5jbHVkZSgicGxhbmUuZ3JhcGhxbC51cmxzIikpJyBub3QgaW4gdDoKICAgIG9sZCA9ICgKICAgICAgICAiICAgIHVybHBhdHRlcm5zID0gW1xuIgogICAgICAgICcgICAgICAgIHBhdGgoImdyYXBocWwvIiwgaW5jbHVkZSgicGxhbmUuZ3JhcGhxbC51cmxzIikpLFxuJwogICAgICAgICcgICAgICAgIHBhdGgoImFwaS9ncmFwaHFsLyIsIGluY2x1ZGUoInBsYW5lLmdyYXBocWwudXJscyIpKSxcbicKICAgICAgICAiICAgIF0gKyB1cmxwYXR0ZXJuc1xuIgogICAgKQogICAgbmV3ID0gKAogICAgICAgICIgICAgdXJscGF0dGVybnMgPSBbXG4iCiAgICAgICAgJyAgICAgICAgcGF0aCgiZ3JhcGhxbC8iLCBpbmNsdWRlKCJwbGFuZS5ncmFwaHFsLnVybHMiKSksXG4nCiAgICAgICAgJyAgICAgICAgcGF0aCgiZ3JhcGhxbCIsIGluY2x1ZGUoInBsYW5lLmdyYXBocWwudXJscyIpKSxcbicKICAgICAgICAnICAgICAgICBwYXRoKCJhcGkvZ3JhcGhxbC8iLCBpbmNsdWRlKCJwbGFuZS5ncmFwaHFsLnVybHMiKSksXG4nCiAgICAgICAgJyAgICAgICAgcGF0aCgiYXBpL2dyYXBocWwiLCBpbmNsdWRlKCJwbGFuZS5ncmFwaHFsLnVybHMiKSksXG4nCiAgICAgICAgIiAgICBdICsgdXJscGF0dGVybnNcbiIKICAgICkKICAgIGlmIG9sZCBpbiB0OgogICAgICAgIHVybHMud3JpdGVfdGV4dCh0LnJlcGxhY2Uob2xkLCBuZXcsIDEpKQogICAgICAgIHByaW50KCJwYXRjaGVkLWdyYXBocWwtdXJscyIpCmVsc2U6CiAgICBwcmludCgidXJscy1vayIpCgojIHRva2VuIGNhbWVsQ2FzZQp0cCA9IFBhdGgoIi9jb2RlL3BsYW5lL2F1dGhlbnRpY2F0aW9uL3ZpZXdzL2FwcC9tb2JpbGUvdG9rZW4ucHkiKQp0dCA9IHRwLnJlYWRfdGV4dCgpCmlmICJhY2Nlc3NUb2tlbiIgbm90IGluIHR0OgogICAgb2xkID0gKAogICAgICAgICIgICAgICAgIHJldHVybiB7XG4iCiAgICAgICAgJyAgICAgICAgICAgICJyZWZyZXNoX3Rva2VuIjogc3RyKHJlZnJlc2gpLFxuJwogICAgICAgICcgICAgICAgICAgICAiYWNjZXNzX3Rva2VuIjogc3RyKHJlZnJlc2guYWNjZXNzX3Rva2VuKSxcbicKICAgICAgICAiICAgICAgICB9IgogICAgKQogICAgbmV3ID0gKAogICAgICAgICIgICAgICAgIGFjY2VzcyA9IHN0cihyZWZyZXNoLmFjY2Vzc190b2tlbilcbiIKICAgICAgICAiICAgICAgICByZWZyZXNoX3MgPSBzdHIocmVmcmVzaClcbiIKICAgICAgICAiICAgICAgICByZXR1cm4ge1xuIgogICAgICAgICcgICAgICAgICAgICAicmVmcmVzaF90b2tlbiI6IHJlZnJlc2hfcyxcbicKICAgICAgICAnICAgICAgICAgICAgImFjY2Vzc190b2tlbiI6IGFjY2VzcyxcbicKICAgICAgICAnICAgICAgICAgICAgInJlZnJlc2hUb2tlbiI6IHJlZnJlc2hfcyxcbicKICAgICAgICAnICAgICAgICAgICAgImFjY2Vzc1Rva2VuIjogYWNjZXNzLFxuJwogICAgICAgICIgICAgICAgIH0iCiAgICApCiAgICBpZiBvbGQgaW4gdHQ6CiAgICAgICAgdHAud3JpdGVfdGV4dCh0dC5yZXBsYWNlKG9sZCwgbmV3KSkKICAgICAgICBwcmludCgicGF0Y2hlZC10b2tlbi1jYW1lbGNhc2UiKQplbHNlOgogICAgcHJpbnQoInRva2VuLWNhbWVsY2FzZS1vayIpCgojIEdyYXBoUUwgZGVidWcgbG9nZ2luZyAoa2VlcCkKdmlld3MgPSBQYXRoKCIvY29kZS9wbGFuZS9ncmFwaHFsL3ZpZXdzLnB5IikKdnQgPSB2aWV3cy5yZWFkX3RleHQoKQppZiAiR1FMX0RFQlVHX1FVRVJZIiBub3QgaW4gdnQ6CiAgICBpZiAiY2xhc3MgQ3VzdG9tR3JhcGhRTFZpZXcoQXN5bmNHcmFwaFFMVmlldyk6XG4iIGluIHZ0IGFuZCAiYXN5bmMgZGVmIGRpc3BhdGNoIiBub3QgaW4gdnQ6CiAgICAgICAgaW5qZWN0ID0gKAogICAgICAgICAgICAiICAgIGFzeW5jIGRlZiBkaXNwYXRjaChzZWxmLCByZXF1ZXN0LCAqYXJncywgKiprd2FyZ3MpOlxuIgogICAgICAgICAgICAiICAgICAgICB0cnk6XG4iCiAgICAgICAgICAgICIgICAgICAgICAgICByYXcgPSByZXF1ZXN0LmJvZHlcbiIKICAgICAgICAgICAgIiAgICAgICAgICAgIGlmIGlzaW5zdGFuY2UocmF3LCAoYnl0ZXMsIGJ5dGVhcnJheSkpOlxuIgogICAgICAgICAgICAiICAgICAgICAgICAgICAgIHJlcXVlc3QuX2dxbF9kZWJ1Z19ib2R5ID0gcmF3LmRlY29kZShcInV0Zi04XCIsIFwiaWdub3JlXCIpXG4iCiAgICAgICAgICAgICIgICAgICAgICAgICBlbHNlOlxuIgogICAgICAgICAgICAiICAgICAgICAgICAgICAgIHJlcXVlc3QuX2dxbF9kZWJ1Z19ib2R5ID0gc3RyKHJhdyBvciBcIlwiKVxuIgogICAgICAgICAgICAiICAgICAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGU6XG4iCiAgICAgICAgICAgICIgICAgICAgICAgICByZXF1ZXN0Ll9ncWxfZGVidWdfYm9keSA9IGZcIjxib2R5LWVycm9yIHtlfT5cIlxuIgogICAgICAgICAgICAiICAgICAgICByZXR1cm4gYXdhaXQgc3VwZXIoKS5kaXNwYXRjaChyZXF1ZXN0LCAqYXJncywgKiprd2FyZ3MpXG5cbiIKICAgICAgICApCiAgICAgICAgdnQgPSB2dC5yZXBsYWNlKAogICAgICAgICAgICAiY2xhc3MgQ3VzdG9tR3JhcGhRTFZpZXcoQXN5bmNHcmFwaFFMVmlldyk6XG4iLAogICAgICAgICAgICAiY2xhc3MgQ3VzdG9tR3JhcGhRTFZpZXcoQXN5bmNHcmFwaFFMVmlldyk6XG4iICsgaW5qZWN0LAogICAgICAgICAgICAxLAogICAgICAgICkKICAgIG0gPSByZS5zZWFyY2gociIgICAgYXN5bmMgZGVmIHByb2Nlc3NfcmVzdWx0XChbXHNcU10qP1xuICAgICAgICByZXR1cm4gcHJvY2Vzc2VkX3Jlc3VsdFxuIiwgdnQpCiAgICBpZiBtOgogICAgICAgIG5ldyA9ICgKICAgICAgICAgICAgIiAgICBhc3luYyBkZWYgcHJvY2Vzc19yZXN1bHQoXG4iCiAgICAgICAgICAgICIgICAgICAgIHNlbGYsXG4iCiAgICAgICAgICAgICIgICAgICAgIHJlcXVlc3Q6IEFueSxcbiIKICAgICAgICAgICAgIiAgICAgICAgcmVzdWx0OiBFeGVjdXRpb25SZXN1bHQsXG4iCiAgICAgICAgICAgICIgICAgICAgIGNvbnRleHQ6IE9wdGlvbmFsW0V4ZWN1dGlvbkNvbnRleHRdID0gTm9uZSxcbiIKICAgICAgICAgICAgIiAgICApIC0+IERpY3Rbc3RyLCBBbnldOlxuIgogICAgICAgICAgICAiICAgICAgICBpbXBvcnQgbG9nZ2luZ1xuIgogICAgICAgICAgICAiICAgICAgICBsb2cgPSBsb2dnaW5nLmdldExvZ2dlcihcInBsYW5lLmFwaS5yZXF1ZXN0XCIpXG4iCiAgICAgICAgICAgICIgICAgICAgIGJvZHkgPSBnZXRhdHRyKHJlcXVlc3QsIFwiX2dxbF9kZWJ1Z19ib2R5XCIsIFwiXCIpIG9yIFwiXCJcbiIKICAgICAgICAgICAgIiAgICAgICAgbG9nLmVycm9yKFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgXCJHUUxfREVCVUdfUVVFUlkgdXNlcj0lcyBwYXRoPSVzIGJvZHk9JXMgZXJyb3JzPSVzIGRhdGFfa2V5cz0lc1wiLFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgZ2V0YXR0cihnZXRhdHRyKHJlcXVlc3QsIFwidXNlclwiLCBOb25lKSwgXCJpZFwiLCBOb25lKSxcbiIKICAgICAgICAgICAgIiAgICAgICAgICAgIGdldGF0dHIocmVxdWVzdCwgXCJwYXRoXCIsIFwiXCIpLFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgKGJvZHkgb3IgXCJcIilbOjQwMDBdLFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgW3tcIm1lc3NhZ2VcIjogZ2V0YXR0cihlLCBcIm1lc3NhZ2VcIiwgc3RyKGUpKSwgXCJwYXRoXCI6IGdldGF0dHIoZSwgXCJwYXRoXCIsIE5vbmUpfSBmb3IgZSBpbiAocmVzdWx0LmVycm9ycyBvciBbXSldLFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgbGlzdCgocmVzdWx0LmRhdGEgb3Ige30pLmtleXMoKSkgaWYgaXNpbnN0YW5jZShyZXN1bHQuZGF0YSwgZGljdCkgZWxzZSB0eXBlKHJlc3VsdC5kYXRhKS5fX25hbWVfXyxcbiIKICAgICAgICAgICAgIiAgICAgICAgKVxuIgogICAgICAgICAgICAiICAgICAgICBwcm9jZXNzZWRfcmVzdWx0ID0ge1wiZGF0YVwiOiByZXN1bHQuZGF0YX1cbiIKICAgICAgICAgICAgIiAgICAgICAgaWYgcmVzdWx0LmVycm9yczpcbiIKICAgICAgICAgICAgIiAgICAgICAgICAgIHByb2Nlc3NlZF9yZXN1bHRbXCJlcnJvcnNcIl0gPSBbe1wibWVzc2FnZVwiOiBlcnJvci5tZXNzYWdlLCBcImV4dGVuc2lvbnNcIjogZXJyb3IuZXh0ZW5zaW9ucyBvciB7fX0gZm9yIGVycm9yIGluIHJlc3VsdC5lcnJvcnNdXG4iCiAgICAgICAgICAgICIgICAgICAgIHJldHVybiBwcm9jZXNzZWRfcmVzdWx0XG4iCiAgICAgICAgKQogICAgICAgIHZ0ID0gdnRbOiBtLnN0YXJ0KCldICsgbmV3ICsgdnRbbS5lbmQoKSA6XQogICAgICAgIHZpZXdzLndyaXRlX3RleHQodnQpCiAgICAgICAgcHJpbnQoInBhdGNoZWQtZ3FsLWRlYnVnIikKZWxzZToKICAgIHByaW50KCJncWwtZGVidWctb2siKQoKcHJpbnQoIkFMTF9GSUxFX1BBVENIRVNfT0siKQo= | base64 -d > /tmp/cosmic-gql-patch.py
+        python /tmp/cosmic-gql-patch.py
+        exec ./bin/docker-entrypoint-api.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_started
+      plane-mq:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      bootstrap:
+        condition: service_completed_successfully
+
+  worker:
+    image: plane-latest-api:cosmic-worklog-v1.5.3c
+    restart: always
+    command: ./bin/docker-entrypoint-worker.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    depends_on:
+      api:
+        condition: service_started
+
+  beat-worker:
+    image: plane-latest-api:cosmic-worklog-v1.5.3c
+    restart: always
+    command: ./bin/docker-entrypoint-beat.sh
+    environment:
+      <<: [*app-env, *db-env, *redis-env, *minio-env, *aws-s3-env]
+    depends_on:
+      api:
+        condition: service_started
+
+  web:
+    image: plane-latest-web:cosmic-worklog-v1.4
+    restart: always
+    depends_on:
+      - api
+      - worker
+
+  space:
+    image: makeplane/plane-space:v1.3.1
+    restart: always
+    depends_on:
+      - api
+      - web
+
+  admin:
+    image: makeplane/plane-admin:v1.3.1
+    restart: always
+    depends_on:
+      - api
+      - web
+
+  live:
+    image: makeplane/plane-live:v1.3.1
+    restart: always
+    environment:
+      <<: [*live-env, *redis-env]
+    depends_on:
+      - api
+      - web
+
+  proxy:
+    image: plane-latest-proxy:cosmic-worklog-v1.5.1
+    restart: always
+    expose:
+      - "80"
+    environment:
+      <<: *proxy-env
+    depends_on:
+      - web
+      - api
+      - space
+      - admin
+      - live
+
+
+volumes:
+  pgdata_latest:
+  redisdata_latest:
+  uploads_latest:
+  rabbitmq_data_latest:
