@@ -1,0 +1,210 @@
+[
+  {
+    "id": "a926bc2f-669e-4fb5-b695-b42d14c75d6f",
+    "slug": "my-work",
+    "description": "Your open work items across the workspace, grouped by status and prioritized.",
+    "instructions": "Show my open (not-yet-completed) work items across the workspace.\n\nGroup the results by state group (Backlog, Unstarted, Started/In Progress, etc.). Within each group, sort by priority (Urgent \u2192 Low), then by due date (soonest first). Begin with a one-line summary of totals: total open, how many are overdue, and how many are blocked.\n\nRender each item on a single line with its unique key as a clickable link, its priority, and its due date if set. Flag overdue and blocked items inline.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": false,
+    "parameters": [],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "6c4c2c7b-605e-4837-8255-373117e45d17",
+    "slug": "standup",
+    "description": "A daily standup: what you completed, what's in progress, and what's blocked.",
+    "instructions": "Produce a standup update for me. Organize it into three sections:\n\n- Completed: My work items that moved to a completed state since the previous working day.\n- In progress: My items currently in a started/in-progress state.\n- Blocked: My items that have an open \"blocked by\" relation \u2014 name the blocking item and its state.\n\nDefault the lookback window to the last working day (e.g. Friday if today is Monday) unless I specify a different period. Keep every item to one concise line with its unique key linked. If a section is empty, say so briefly.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": false,
+    "parameters": [],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "9724d1b3-18fb-40ce-8616-f1441f0eedce",
+    "slug": "project-status",
+    "description": "A health snapshot of a project: status, priorities, risks, and recent change.",
+    "instructions": "Give a status overview of the project in context. If no project is in context, use the project I name; if it is still ambiguous, ask which project.\n\nLead with a 2-3 sentence health read: is the project on track or at risk, and why. Then include:\n- Totals by state group.\n- Breakdown by priority.\n- Count of overdue items and count of unassigned items.\n- The top blockers (items blocking the most other work).\n- What changed in the last 7 days (created, completed, notable state changes).\n\nKeep it scannable, with short sections and clickable unique keys.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": false,
+    "parameters": [],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "28fcb14d-f8e9-4fbd-98e1-70743b4b8ee4",
+    "slug": "cycle-report",
+    "description": "Sprint/cycle progress: scope, completion, distribution, burndown, and risks.",
+    "instructions": "Summarize the {{cycle}}. If none is named, use the active cycle of the project in context.\n\nRetrieve the cycle's details including the summary, the by-state and by-assignee breakdowns, and the burndown series. Report:\n- Scope: total items, plus added and removed during the cycle.\n- Progress: completed vs open, with completion percentage.\n- Distribution by state group and by assignee.\n- Burndown trend: are we tracking to finish by the end date?\n- Risks: stalled items, unassigned work, and overdue items.\n\nIf I ask about a specific past point in time (e.g. \"a week ago\"), read that value from the burndown series \u2014 do not infer it from current totals. Present with clear sections, clickable unique keys and if applicable using a chart.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": true,
+    "parameters": [
+      "cycle"
+    ],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "06f85bf3-6c02-4bc5-8020-b025b017b593",
+    "slug": "team-workload",
+    "description": "How open work is distributed across the team, with overload/idle flags.",
+    "instructions": "Show how open work is distributed across team members for the {{cycle}} in context. If no cycle is in context, use the active cycle of the project in context. If no project is in context, ask which project.\n\nFor each assignee, report: open item count, count of urgent/high-priority items, and count of overdue items. Include an \"Unassigned\" row for open items with no assignee. Sort by open count, highest first.\n\nFlag members who look overloaded (high open count with several urgent items) and members who are idle (no open items). Present as a table.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": true,
+    "parameters": [
+      "cycle"
+    ],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "9535c4ee-b9b7-469d-ba4b-f5319252d4a5",
+    "slug": "blocked-items",
+    "description": "Everything that's blocked, who owns it, and what's blocking it.",
+    "instructions": "List the work items in scope (the project or cycle in context, or the whole workspace if none) that have an open \"blocked by\" relation.\n\nFor each blocked item, show: the item (linked unique key), its owner/assignee, its state, and the blocking item with the blocker's state. Order by priority, highest first.\n\nEnd with a one-line tally of how many items are blocked by still-open blockers versus blockers that are already completed \u2014 the latter are likely stale links worth cleaning up.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": false,
+    "parameters": [],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "45b4bbd0-090b-4422-a2e7-a1c3c81475fd",
+    "slug": "needs-attention",
+    "description": "A hygiene sweep: overdue, stale, and started-but-unassigned work.",
+    "instructions": "Surface work items in scope that need attention, grouped by reason:\n- Overdue: past their due date and not completed.\n- Stale: no activity in the last 14 days and not completed.\n- Started but unassigned: in a started state with no assignee.\n\nWithin each group, sort by priority and show the assignee (or \"unassigned\"). Keep this strictly actionable \u2014 it is a cleanup list, so omit healthy items. If a group is empty, skip it.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": false,
+    "parameters": [],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "c7412fa8-e966-4dab-9caa-3fe7b3f7d497",
+    "slug": "recent-activity",
+    "description": "What changed recently: created, completed, and updated work.",
+    "instructions": "Summarize what changed in scope (the project or cycle in context, or the workspace) over the last 7 days, or the {{time_window}} I specify.\n\nDraw from activity history, not just current state. Group by type of change: items created, items completed, state changes, priority/assignee changes, and (for a cycle) scope added or removed. Lead each group with a count, then list the notable specifics with linked unique keys. Finish with a one-sentence read on momentum.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": true,
+    "parameters": [
+      "time_window"
+    ],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "e042fe23-16ef-4ed4-83da-2a25e16223ee",
+    "slug": "find-pages",
+    "description": "Search the workspace wiki/pages for a topic and summarize the best matches.",
+    "instructions": "Search the workspace's pages and wiki for content about {{topic}}.\n\nReturn the most relevant pages, each as: the page title rendered as a clickable link, a one-line summary of what it covers, and when it was last updated. Order by relevance. If nothing relevant is found, say so plainly rather than guessing \u2014 do not fabricate page contents.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": true,
+    "parameters": [
+      "topic"
+    ],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "b50aa95c-2f2a-47fd-a9ec-5179e6daa4ce",
+    "slug": "time-tracking",
+    "description": "A summary of logged time by person and work item.",
+    "instructions": "Summarize logged time (worklogs) in scope over the {{time_window}} I specify; default to the last 7 days.\n\nGroup by assignee, then by work item, showing time logged per item, a subtotal per person, and an overall total. Sort people by total time, highest first. If there are no worklogs in the window, state that clearly.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": true,
+    "parameters": [
+      "time_window"
+    ],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "3027f0d5-82da-4e0f-b63b-1a9fe7672c13",
+    "slug": "file-bug",
+    "description": "Create a well-structured bug report in the current project. (Build mode)",
+    "instructions": "Create a new work item of type \"Bug\" in the project in context, titled {{title}}.\n\nGive it a structured description with these sections: Steps to reproduce, Expected result, Actual result, and Environment \u2014 fill in whatever I have provided and leave clear placeholders for the rest. Default the {{priority}} to High unless I state otherwise. Set the {{assignee}} only if I specify one. If the project has no \"Bug\" work-item type, use the closest equivalent, or default type and mention which you used.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": true,
+    "parameters": [
+      "title",
+      "priority",
+      "assignee"
+    ],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  },
+  {
+    "id": "dca029bc-7be5-4c44-b7f0-4b3f0686df95",
+    "slug": "new-prd",
+    "description": "Create a PRD wiki page from a template for a feature. (Build mode)",
+    "instructions": "Create a new wiki page for {{feature}} using a PRD template with these sections: Problem, Goals, Non-goals, Scope, Milestones, and Open questions.\n\nPre-fill anything I have described and leave concise prompts under the empty sections so they are easy to complete. Title the page clearly with the feature name.",
+    "is_active": true,
+    "scope": "system",
+    "is_system": true,
+    "has_parameters": true,
+    "parameters": [
+      "feature"
+    ],
+    "user_id": null,
+    "workspace_id": null,
+    "created_by_id": null,
+    "created_at": "2026-07-02T13:41:52.081819Z",
+    "updated_at": "2026-07-02T13:41:52.081819Z"
+  }
+]

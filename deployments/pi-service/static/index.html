@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="plane-build-version" content="cosmic-pilot-3.0" />
+    <title>Pilot · Plane Intelligence</title>
+    <link rel="stylesheet" href="/cosmic-pilot/static/pilot.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet" />
+    <script>
+      window.PI_BASE_URL = "";
+    </script>
+  </head>
+  <body>
+    <div id="app">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <div class="brand">
+            <div class="brand-mark">π</div>
+            <div>Pilot</div>
+          </div>
+          <button class="icon-btn" id="close-sidebar-btn" title="Close" type="button">✕</button>
+        </div>
+        <button class="primary-btn" id="new-chat-btn" type="button">+ New chat</button>
+        <div class="section-label">Favorites</div>
+        <div class="thread-list" id="favorite-list" style="flex: 0 0 auto; max-height: 28%"></div>
+        <div class="section-label">Recent</div>
+        <div class="thread-list" id="thread-list"></div>
+        <div class="sidebar-footer">Plane Intelligence · self-hosted</div>
+      </aside>
+
+      <main class="main">
+        <div class="topbar">
+          <div class="topbar-left">
+            <button class="icon-btn" id="menu-btn" type="button" title="Chats">☰</button>
+            <div class="chat-title" id="chat-title">New Conversation</div>
+          </div>
+          <div class="mode-tabs">
+            <button class="mode-tab active" data-mode="ask" type="button">Ask</button>
+            <button class="mode-tab" data-mode="build" type="button">Build</button>
+            <button class="mode-tab" data-mode="autopilot" type="button">Autopilot</button>
+          </div>
+          <div class="topbar-right">
+            <select class="select" id="model-select" title="Model"></select>
+            <button class="icon-btn" id="favorite-btn" type="button" title="Favorite">★</button>
+            <button class="icon-btn" id="rename-btn" type="button" title="Rename">✎</button>
+            <button class="icon-btn" id="delete-btn" type="button" title="Delete">🗑</button>
+          </div>
+        </div>
+
+        <div class="messages">
+          <div class="messages-inner" id="messages-inner"></div>
+        </div>
+
+        <div class="skills-row" id="skills-row"></div>
+
+        <div class="composer-wrap">
+          <div class="composer">
+            <textarea id="composer-input" placeholder="Ask Pilot anything about your workspace…" rows="2"></textarea>
+            <div class="composer-bar">
+              <div class="composer-left">
+                <button class="ghost-btn" id="websearch-btn" type="button">Web search</button>
+              </div>
+              <div class="composer-right">
+                <button class="send-btn" id="send-btn" type="button">Send ↑</button>
+              </div>
+            </div>
+          </div>
+          <div class="hint">Pilot uses your workspace context · modes match cloud (Ask / Build / Autopilot)</div>
+        </div>
+      </main>
+    </div>
+    <script src="/cosmic-pilot/static/pilot.js"></script>
+  </body>
+</html>

@@ -11,6 +11,16 @@
 
 	reverse_proxy /live/* live:3000
 
+	# Plane Intelligence (Pilot AI) — pi.plane.so compatible API + UI
+	@pi_api path /api/v1/chat/* /api/v1/flags/ /api/v1/flags /api/v1/skills/ /api/v1/skills /api/v1/artifacts/* /api/v1/attachments/*
+	handle @pi_api {
+		reverse_proxy pi:8080
+	}
+
+	handle /cosmic-pilot/* {
+		reverse_proxy pi:8080
+	}
+
 	reverse_proxy /api/* api:8000
 
 	reverse_proxy /auth/* api:8000
@@ -24,8 +34,14 @@
 	reverse_proxy /{$BUCKET_NAME}/* plane-minio:9000
 	reverse_proxy /{$BUCKET_NAME} plane-minio:9000
 
-	# SPA routes including /m/auth
-	reverse_proxy /* web:3000
+	# SPA + Pilot inject (replace-response plugin)
+	handle {
+		reverse_proxy web:3000
+		replace {
+			</head> "<script src=\"/cosmic-pilot/inject.js\" defer></script></head>"
+			</HEAD> "<script src=\"/cosmic-pilot/inject.js\" defer></script></HEAD>"
+		}
+	}
 }
 
 {
