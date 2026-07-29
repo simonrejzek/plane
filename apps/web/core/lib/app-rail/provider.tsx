@@ -13,7 +13,8 @@ import type { IAppRailVisibilityContext } from "./types";
 
 interface AppRailVisibilityProviderProps {
   children: React.ReactNode;
-  isEnabled?: boolean; // Allow override, default false
+  /** When true, render the left App Rail (Plane 3.x shell). Default true for self-host parity with app.plane.so. */
+  isEnabled?: boolean;
 }
 
 /**
@@ -22,7 +23,7 @@ interface AppRailVisibilityProviderProps {
  */
 export const AppRailVisibilityProvider = observer(function AppRailVisibilityProvider({
   children,
-  isEnabled = false,
+  isEnabled = true,
 }: AppRailVisibilityProviderProps) {
   const { workspaceSlug } = useParams();
 

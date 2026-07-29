@@ -18,7 +18,8 @@ export default function WorkspaceLayout(props: Route.ComponentProps) {
   return (
     <AuthenticationWrapper>
       <WorkspaceAuthWrapper>
-        <AppRailVisibilityProvider>
+        {/* Enable App Rail shell to match app.plane.so 3.x chrome (top nav + left rail). */}
+        <AppRailVisibilityProvider isEnabled>
           <WorkspaceContentWrapper>
             <GlobalModals workspaceSlug={workspaceSlug} />
             <Outlet />
