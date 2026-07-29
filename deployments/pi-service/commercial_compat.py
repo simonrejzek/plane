@@ -147,6 +147,28 @@ def features_payload(workspace_id: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+
+def as_page(items: Any, total: Optional[int] = None) -> Dict[str, Any]:
+    """Commercial SPA list loaders expect {results, next_cursor, total_count} not bare arrays."""
+    if isinstance(items, dict) and "results" in items:
+        return items
+    if not isinstance(items, list):
+        items = []
+    return {
+        "results": items,
+        "next_cursor": None,
+        "prev_cursor": None,
+        "next_page_results": False,
+        "prev_page_results": False,
+        "count": len(items),
+        "total_count": total if total is not None else len(items),
+        "total_pages": 1,
+        "total_results": total if total is not None else len(items),
+        "extra_stats": None,
+        "grouped_by": None,
+        "sub_grouped_by": None,
+    }
+
 def enrich_workspace(ws: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(ws)
     role = out.get("role")
@@ -411,7 +433,22 @@ def register_commercial_compat(app: FastAPI) -> None:
             base.update(patch)
         return base
 
-    # modules-lite → CE modules
+    # modules (+ lite) → CE modules, wrapped for commercial paginated loader
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/modules/")
+    async def modules_list(slug: str, project_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        # forward query string (cursor/filters) if present
+        q = str(request.url.query or "")
+        path = f"/api/workspaces/{slug}/projects/{project_id}/modules/"
+        if q:
+            path = f"{path}?{q}"
+        status, body, _ = await ce_get(path, request)
+        if status != 200:
+            return JSONResponse(body if isinstance(body, (dict, list)) else {"error": str(body)}, status_code=status)
+        return as_page(body)
+
     @app.get("/api/workspaces/{slug}/projects/{project_id}/modules-lite/")
     async def modules_lite(slug: str, project_id: str, request: Request):
         err_status, role, err_body = await resolve_membership(slug, request)
@@ -420,7 +457,54 @@ def register_commercial_compat(app: FastAPI) -> None:
         status, body, _ = await ce_get(f"/api/workspaces/{slug}/projects/{project_id}/modules/", request)
         if status != 200:
             return JSONResponse(body if isinstance(body, (dict, list)) else {"error": str(body)}, status_code=status)
-        return body if isinstance(body, list) else []
+        return as_page(body)
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/cycles-lite/")
+    async def cycles_lite_project(slug: str, project_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        status, body, _ = await ce_get(f"/api/workspaces/{slug}/projects/{project_id}/cycles/", request)
+        if status != 200:
+            # empty page if CE endpoint missing/fails
+            return as_page([])
+        return as_page(body)
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/issues/total-count/")
+    async def issues_total_count(slug: str, project_id: str, request: Request):
+        """Commercial kanban calls this; synthesize from CE issues total_count."""
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        # try CE issues list with same query params minus layout-only fields
+        q = dict(request.query_params)
+        # fetch a grouped issues page to get totals when possible
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/issues/",
+            request,
+            params=q or None,
+        )
+        if status == 200 and isinstance(body, dict):
+            # group counts if results are dict of buckets
+            results = body.get("results")
+            if isinstance(results, dict):
+                counts = {}
+                for gid, bucket in results.items():
+                    if isinstance(bucket, dict):
+                        counts[gid] = bucket.get("total_results") or len(bucket.get("results") or [])
+                    elif isinstance(bucket, list):
+                        counts[gid] = len(bucket)
+                return {
+                    "total_count": body.get("total_count") or body.get("total_results") or sum(counts.values()),
+                    "grouped_count": counts,
+                    "counts": counts,
+                }
+            return {
+                "total_count": body.get("total_count") or body.get("total_results") or 0,
+                "grouped_count": {},
+                "counts": {},
+            }
+        return {"total_count": 0, "grouped_count": {}, "counts": {}}
 
     @app.get("/api/workspaces/{slug}/modules-lite/")
     async def workspace_modules_lite(slug: str, request: Request):

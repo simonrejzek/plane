@@ -61,7 +61,30 @@
 	@ws_modules_lite path_regexp ^/api/workspaces/[^/]+/(modules-lite|cycles-lite)/?$
 	reverse_proxy @ws_modules_lite pi:8080
 
-	@proj_modules_lite path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/modules-lite/?$
+
+	# GET-only wrappers (POST/PATCH/DELETE for modules must stay on CE API)
+	@proj_modules {
+		method GET
+		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/modules/?$
+	}
+	reverse_proxy @proj_modules pi:8080
+
+	@proj_cycles_lite {
+		method GET
+		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/cycles-lite/?$
+	}
+	reverse_proxy @proj_cycles_lite pi:8080
+
+	@proj_issues_tc {
+		method GET
+		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/issues/total-count/?$
+	}
+	reverse_proxy @proj_issues_tc pi:8080
+
+	@proj_modules_lite {
+		method GET
+		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/modules-lite/?$
+	}
 	reverse_proxy @proj_modules_lite pi:8080
 
 	@proj_features path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/features/?$
