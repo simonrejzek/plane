@@ -143,7 +143,8 @@ def test_current_plan_business_selfhost():
     assert r.status_code == 200
     data = r.json()
     assert data["product"] == "BUSINESS"
-    assert data["is_self_managed"] is True
+    # Cloud-shaped plan: not self-managed so official mobile shows Plane AI
+    assert data["is_self_managed"] is False
     assert data["is_free_member_count_exceeded"] is False
     assert data["show_payment_button"] is False
 

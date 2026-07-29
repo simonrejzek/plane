@@ -17,11 +17,13 @@ def get_contract_feature_flags() -> dict:
     When contract mode is on we enable core Business flags the mobile app expects.
     """
     enabled = is_contract_license_enabled()
+    # Product surface flags that unlock Wiki + Plane AI on official mobile/web.
+    # Keep these true whenever contract mode is on (default for this stack).
     flags = {
         "BULK_OPS": enabled,
         "BULK_OPS_ADVANCED": enabled,
         "COLLABORATION_CURSOR": enabled,
-        "EDITOR_AI_OPS": enabled,
+        "EDITOR_AI_OPS": True if enabled else False,
         "ESTIMATE_WITH_TIME": enabled,
         "ISSUE_TYPE_DISPLAY": enabled,
         "ISSUE_TYPE_SETTINGS": enabled,
@@ -32,14 +34,14 @@ def get_contract_feature_flags() -> dict:
         "VIEW_LOCK": enabled,
         "VIEW_PUBLISH": enabled,
         "WORKSPACE_ACTIVE_CYCLES": enabled,
-        "WORKSPACE_PAGES": enabled,
+        "WORKSPACE_PAGES": True if enabled else False,
         "ISSUE_WORKLOG": enabled,
         "PROJECT_GROUPING": enabled,
         "ACTIVE_CYCLE_PRO": enabled,
         "NO_LOAD": False,
         "FILE_SIZE_LIMIT_PRO": enabled,
-        "PI_CHAT": enabled,
-        "PI_DEDUPE": enabled,
+        "PI_CHAT": True if enabled else False,
+        "PI_DEDUPE": True if enabled else False,
         "SILO_IMPORTERS": False,
         "SILO_INTEGRATIONS": False,
         "JIRA_IMPORTER": False,
@@ -51,8 +53,9 @@ def get_contract_feature_flags() -> dict:
         "GITHUB_INTEGRATION": False,
         "GITLAB_INTEGRATION": False,
         "SLACK_INTEGRATION": False,
-        "PI_CHAT_MOBILE": enabled,
-        "PI_DEDUPE_MOBILE": enabled,
+        "PI_CHAT_MOBILE": True if enabled else False,
+        "PI_DEDUPE_MOBILE": True if enabled else False,
+        "AI_CHAT": True if enabled else False,
         # Newer commercial mobile flags — off unless product enables them
         "TIMELINE_DEPENDENCY": True,
         "INBOX_STACKING": True,

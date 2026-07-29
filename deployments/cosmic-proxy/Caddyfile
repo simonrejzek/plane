@@ -20,6 +20,9 @@
 	# Each reverse_proxy path is OR'd within its matcher; keep them separate
 	# so Caddy does not AND unrelated path_regexps together.
 	reverse_proxy /api/payments/* pi:8080
+	# Disco-compatible feature flags (GraphQL FeatureFlagQuery + commercial clients)
+	reverse_proxy /api/feature-flags/ pi:8080
+	reverse_proxy /api/feature-flags pi:8080
 	reverse_proxy /api/users/me/workspaces/ pi:8080
 	reverse_proxy /api/users/me/workspaces pi:8080
 

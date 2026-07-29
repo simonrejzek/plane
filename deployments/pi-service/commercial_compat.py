@@ -41,34 +41,45 @@ WORKSPACE_ROLES: List[Dict[str, Any]] = _load("workspace_roles.json", [])
 
 PREF_STORE: Dict[str, Dict[str, Any]] = {}
 
-SELFHOST_PLAN = {
-    "is_cancelled": False,
-    "purchased_seats": 9999,
-    "current_period_end_date": None,
-    "interval": "YEARLY",
-    "product": "BUSINESS",
-    "is_offline_payment": True,
-    "trial_end_date": None,
-    "has_activated_free_trial": False,
-    "has_added_payment_method": True,
-    "subscription": None,
-    "is_self_managed": True,
-    "is_on_trial": False,
-    "is_trial_allowed": False,
-    "remaining_trial_days": 0,
-    "has_upgraded": True,
-    "show_payment_button": False,
-    "show_trial_banner": False,
-    "free_seats": 9999,
-    "occupied_seats": 1,
-    "show_seats_banner": False,
-    "current_period_start_date": None,
-    "is_trial_ended": False,
-    "billable_members": 1,
-    "is_free_member_count_exceeded": False,
-    "can_delete_workspace": True,
-    "show_verification_failed_banner": False,
-}
+# Prefer cloud-shaped plan so commercial mobile treats the workspace as SaaS AI surface.
+# (is_self_managed=true hides Pilot on official clients even when feature flags are on.)
+SELFHOST_PLAN = _load(
+    "current_plan_cloud.json",
+    {
+        "is_cancelled": False,
+        "purchased_seats": 9999,
+        "current_period_end_date": None,
+        "interval": "YEARLY",
+        "product": "BUSINESS",
+        "is_offline_payment": True,
+        "trial_end_date": None,
+        "has_activated_free_trial": False,
+        "has_added_payment_method": True,
+        "subscription": None,
+        "is_self_managed": False,
+        "is_on_trial": False,
+        "is_trial_allowed": False,
+        "remaining_trial_days": 0,
+        "has_upgraded": True,
+        "show_payment_button": False,
+        "show_trial_banner": False,
+        "free_seats": 9999,
+        "occupied_seats": 1,
+        "show_seats_banner": False,
+        "current_period_start_date": None,
+        "is_trial_ended": False,
+        "billable_members": 1,
+        "is_free_member_count_exceeded": False,
+        "can_delete_workspace": True,
+        "show_verification_failed_banner": False,
+    },
+)
+# Always force cloud AI surface flags regardless of on-disk plan snapshot.
+SELFHOST_PLAN = dict(SELFHOST_PLAN)
+SELFHOST_PLAN["is_self_managed"] = False
+SELFHOST_PLAN["product"] = SELFHOST_PLAN.get("product") or "BUSINESS"
+SELFHOST_PLAN["show_payment_button"] = False
+SELFHOST_PLAN["is_free_member_count_exceeded"] = False
 
 
 def _forward_headers(request: Request) -> Dict[str, str]:
@@ -835,7 +846,13 @@ def register_commercial_compat(app: FastAPI) -> None:
 
     @app.get("/api/instances/")
     async def instances_version_spoof(request: Request):
-        """Spoof instance version/edition so mobile unlocks Pilot AI (cloud uses \"latest\")."""
+        """Spoof instance version/edition so mobile unlocks Pilot AI.
+
+        Official Plane Cloud returns current_version=\"latest\" (latest_version=null).
+        That string is what the commercial mobile client treats as full SaaS product
+        surface (Wiki + Plane AI). Semver-only spoofs (e.g. 3.0.0) load the app and
+        can enable Wiki via feature flags, but still hide the AI tile.
+        """
         status, body, _ = await ce_get("/api/instances/", request)
         if status != 200 or not isinstance(body, dict):
             return JSONResponse(
@@ -844,12 +861,15 @@ def register_commercial_compat(app: FastAPI) -> None:
             )
         out = dict(body)
         inst = dict(out.get("instance") or {})
-        # Valid semver required (string "latest" breaks some app parsers → Loading failed).
-        # 3.0.0 matches commercial mobile; PLANE_CLOUD + not self-managed unlocks Pilot AI rail.
-        spoof = (os.environ.get("PLANE_SPOOF_VERSION") or "3.0.0").strip() or "3.0.0"
+        # Default matches api.plane.so cloud instances (unlocks mobile Plane AI).
+        spoof = (os.environ.get("PLANE_SPOOF_VERSION") or "latest").strip() or "latest"
         edition = (os.environ.get("PLANE_SPOOF_EDITION") or "PLANE_CLOUD").strip() or "PLANE_CLOUD"
         inst["current_version"] = spoof
-        inst["latest_version"] = spoof
+        # Cloud sets latest_version to null when current_version is "latest".
+        if spoof == "latest":
+            inst["latest_version"] = None
+        else:
+            inst["latest_version"] = spoof
         inst["edition"] = edition
         inst["is_current_version_deprecated"] = False
         out["instance"] = inst
@@ -866,13 +886,64 @@ def register_commercial_compat(app: FastAPI) -> None:
         base = f"https://{domain}"
         cfg["app_base_url"] = cfg.get("app_base_url") or base
         cfg["space_base_url"] = cfg.get("space_base_url") or cfg["app_base_url"]
-        # Cloud-like config keys some commercial clients probe for AI/product servers
-        cfg.setdefault("payment_server_base_url", base)
-        cfg.setdefault("feature_flag_server_base_url", base)
-        cfg.setdefault("prime_server_base_url", base)
+        # Point product servers at ourselves (disco.plane.so equivalents).
+        cfg["payment_server_base_url"] = base
+        cfg["feature_flag_server_base_url"] = base
+        # Cloud uses false (disabled) for prime — avoid clients probing a 404 prime path.
+        cfg["prime_server_base_url"] = False
         cfg.setdefault("silo_base_url", base)
+        # Extra cloud config keys some clients probe (safe defaults).
+        cfg.setdefault("are_access_tokens_disabled", False)
+        cfg.setdefault("is_airgapped", False)
+        cfg.setdefault("min_desktop_version", "3.0.0")
+        cfg.setdefault("desktop_link_handoff_available", True)
         out["config"] = cfg
         return out
+
+    @app.api_route("/api/feature-flags/", methods=["GET", "POST"])
+    @app.api_route("/api/feature-flags", methods=["GET", "POST"])
+    async def feature_flags_disco_compat(request: Request):
+        """Disco-compatible feature-flag endpoint used by GraphQL FeatureFlagQuery
+        and commercial clients (POST {workspace_slug, user_id} → {default: {FLAGS}}).
+        """
+        values = dict((BUSINESS_FLAGS or {}).get("values") or BUSINESS_FLAGS or {})
+        for k in list(values.keys()):
+            values[k] = True
+        values.update(
+            {
+                "APP_RAIL": True,
+                "AI_CHAT": True,
+                "AI_CONVERSE": True,
+                "AI_AUTOPILOT": True,
+                "AI_DEDUPE": True,
+                "AI_FILE_UPLOADS": True,
+                "AI_PAGES_BLOCKS": True,
+                "AI_PAGES_SUMMARY": True,
+                "AI_LABEL_PREDICTION": True,
+                "AI_MCP_CONNECTORS": True,
+                "AI_TEXT_TO_PQL": True,
+                "AI_PAGES_EDIT": True,
+                "AI_SKILLS": True,
+                "PI_CHAT": True,
+                "PI_CHAT_MOBILE": True,
+                "PI_DEDUPE": True,
+                "PI_DEDUPE_MOBILE": True,
+                "PI_CONVERSE": True,
+                "PI_ACTIONS": True,
+                "WORKSPACE_PAGES": True,
+                "NESTED_PAGES": True,
+                "EDITOR_AI_OPS": True,
+                "INITIATIVES": True,
+                "TEAMSPACES": True,
+                "TIMELINE_DEPENDENCY": True,
+                "INBOX_STACKING": True,
+                "EPICS": True,
+                "ADVANCED_SEARCH": True,
+            }
+        )
+        # Shape expected by plane.graphql.queries.feature_flag.fetch_feature_flags:
+        # response.json().values() → iterable of flag maps.
+        return {"default": values}
 
     @app.get("/api/workspaces/{slug}/cycles-lite/")
     async def cycles_lite(slug: str, request: Request):
