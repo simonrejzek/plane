@@ -56,9 +56,14 @@ class CatchUpType:
 class MobileHomeQuery:
     """Fields the App Store client requests on home load that CE does not implement."""
 
-    @strawberry.field(name="notificationCount")
+    @strawberry.field(
+        name="notificationCount",
+        extensions=[PermissionExtension(permissions=[IsAuthenticated()])],
+    )
     async def notification_count(self, info: Info) -> NotificationCountType:
         user = info.context.user
+        if user is None:
+            return NotificationCountType(unread=0, workspaces=[])
 
         def _run():
             base = Notification.objects.filter(
