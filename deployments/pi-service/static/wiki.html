@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wiki · Plane</title>
+    <link rel="stylesheet" href="/cosmic-pilot/static/wiki.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="wiki-app">
+      <aside class="wiki-sidebar">
+        <div class="wiki-sidebar-top">
+          <div class="wiki-brand">
+            <span class="wiki-mark">W</span>
+            <span>Wiki</span>
+          </div>
+          <button type="button" id="new-page-btn" class="primary-btn">+ New page</button>
+        </div>
+        <div class="wiki-search-wrap">
+          <input id="wiki-search" type="search" placeholder="Search pages…" />
+        </div>
+        <div class="wiki-page-list" id="page-list"></div>
+        <div class="wiki-sidebar-foot">Workspace knowledge base</div>
+      </aside>
+      <main class="wiki-main">
+        <div class="wiki-empty" id="empty-state">
+          <h1>Company Wiki</h1>
+          <p>Create and organize workspace pages — same surface as app.plane.so Wiki.</p>
+          <button type="button" id="empty-new-btn" class="primary-btn">Create first page</button>
+        </div>
+        <div class="wiki-editor hidden" id="editor">
+          <div class="wiki-toolbar">
+            <input id="page-title" class="title-input" placeholder="Untitled" />
+            <div class="toolbar-actions">
+              <button type="button" id="save-btn" class="primary-btn">Save</button>
+              <button type="button" id="delete-btn" class="ghost-btn danger">Delete</button>
+            </div>
+          </div>
+          <textarea id="page-body" placeholder="Write anything…"></textarea>
+          <div class="wiki-meta" id="page-meta"></div>
+        </div>
+      </main>
+    </div>
+    <script src="/cosmic-pilot/static/wiki.js"></script>
+  </body>
+</html>

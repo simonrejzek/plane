@@ -32,15 +32,19 @@ STATIC_DIR = BASE_DIR / "static"
 
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = (os.environ.get("LLM_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/")
-LLM_MODEL = os.environ.get("LLM_MODEL") or "deepseek/deepseek-v4-flash"
+LLM_MODEL = os.environ.get("LLM_MODEL") or "deepseek/deepseek-chat"
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER") or "custom"
 DEFAULT_MODEL_ID = os.environ.get("PI_DEFAULT_MODEL") or LLM_MODEL
+# Plane API for agent tools (create/edit work items, pages, etc.)
+PLANE_API_BASE = (os.environ.get("PLANE_API_BASE") or "http://api:8000").rstrip("/")
 CORS_ORIGINS = [
     o.strip()
     for o in (os.environ.get("CORS_ALLOWED_ORIGINS") or "*").split(",")
     if o.strip()
 ]
 APP_DOMAIN = os.environ.get("APP_DOMAIN") or "plane.cosmicboosts.store"
+# Only DeepSeek models are exposed in this self-host build.
+ALLOWED_MODEL_PREFIXES = ("deepseek",)
 
 CHATS: Dict[str, Dict[str, Any]] = {}
 STREAMS: Dict[str, Dict[str, Any]] = {}
@@ -158,72 +162,214 @@ if STATIC_DIR.exists():
     app.mount("/cosmic-pilot/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-def model_catalog() -> List[Dict[str, Any]]:
-    """Prefer cloud-shaped catalog; ensure default maps to configured LLM."""
-    if MODELS_SEED:
-        models = []
-        for m in MODELS_SEED:
-            row = dict(m)
-            # Keep cloud ids for UI parity; resolve_llm maps them for OpenRouter
-            row.setdefault("type", "language_model")
-            row.setdefault("supports_web_search", False)
-            row.setdefault("supports_thinking", False)
-            row["is_default"] = False
-            models.append(row)
-        # Mark first as default if none; also inject self-host default at top
-        default_row = {
-            "id": DEFAULT_MODEL_ID,
-            "name": f"Default ({DEFAULT_MODEL_ID})",
-            "provider": (LLM_PROVIDER or "Custom").title(),
-            "description": "Workspace default model (OpenRouter / custom BYOK)",
-            "type": "language_model",
-            "supports_web_search": False,
-            "supports_thinking": False,
-            "is_default": True,
-        }
-        # If DEFAULT already in list, mark it default
-        found = False
-        for m in models:
-            if m["id"] == DEFAULT_MODEL_ID:
-                m["is_default"] = True
-                found = True
-                break
-        if not found:
-            models.insert(0, default_row)
-        else:
-            for m in models:
-                if m["id"] != DEFAULT_MODEL_ID:
-                    m["is_default"] = False
-        return models
+def _is_deepseek(model_id: str) -> bool:
+    mid = (model_id or "").lower()
+    return any(mid.startswith(p) or p in mid for p in ALLOWED_MODEL_PREFIXES)
 
-    return [
-        {
-            "id": DEFAULT_MODEL_ID,
-            "name": f"Default ({DEFAULT_MODEL_ID})",
-            "provider": (LLM_PROVIDER or "Custom").title(),
-            "description": "Workspace default model",
-            "type": "language_model",
-            "supports_web_search": False,
-            "supports_thinking": False,
-            "is_default": True,
-        }
-    ]
+
+def model_catalog() -> List[Dict[str, Any]]:
+    """DeepSeek-only catalog (other cloud models are disabled on this instance)."""
+    models: List[Dict[str, Any]] = []
+    for m in MODELS_SEED or []:
+        row = dict(m)
+        if not _is_deepseek(str(row.get("id") or "")):
+            continue
+        row.setdefault("type", "language_model")
+        row.setdefault("supports_web_search", False)
+        row.setdefault("supports_thinking", False)
+        row["is_default"] = False
+        models.append(row)
+
+    default_id = DEFAULT_MODEL_ID if _is_deepseek(DEFAULT_MODEL_ID) else "deepseek/deepseek-chat"
+    if not any(m["id"] == default_id for m in models):
+        models.insert(
+            0,
+            {
+                "id": default_id,
+                "name": "DeepSeek Chat",
+                "provider": "DeepSeek",
+                "description": "Only model enabled on this self-hosted Pilot.",
+                "type": "language_model",
+                "supports_web_search": False,
+                "supports_thinking": False,
+                "is_default": True,
+            },
+        )
+    for m in models:
+        m["is_default"] = m["id"] == default_id
+    if not models:
+        models = [
+            {
+                "id": "deepseek/deepseek-chat",
+                "name": "DeepSeek Chat",
+                "provider": "DeepSeek",
+                "description": "Only model enabled on this self-hosted Pilot.",
+                "type": "language_model",
+                "supports_web_search": False,
+                "supports_thinking": False,
+                "is_default": True,
+            }
+        ]
+    return models
 
 
 def resolve_llm(model_id: Optional[str]) -> str:
+    """Force DeepSeek only — never route to OpenAI/Anthropic/etc."""
     mid = model_id or DEFAULT_MODEL_ID
+    if not _is_deepseek(mid):
+        mid = DEFAULT_MODEL_ID if _is_deepseek(DEFAULT_MODEL_ID) else "deepseek/deepseek-chat"
     aliases = {
-        "gpt-5.2": "openai/gpt-4.1-mini",
-        "gpt-5.4": "openai/gpt-4.1-mini",
-        "gpt-5.6-terra": "openai/gpt-4.1-mini",
-        "claude-sonnet-4-5": "anthropic/claude-sonnet-4",
-        "claude-sonnet-4-6": "anthropic/claude-sonnet-4",
-        "claude-sonnet-5": "anthropic/claude-sonnet-4",
-        "zai-org/GLM-5.2": "z-ai/glm-4.5-air",
-        "moonshotai/Kimi-K2.6": "moonshotai/kimi-k2",
-        "deepseek-ai/DeepSeek-V4-Pro": "deepseek/deepseek-v4-flash",
+        "deepseek-ai/DeepSeek-V4-Pro": "deepseek/deepseek-chat",
+        "deepseek/deepseek-v4-flash": "deepseek/deepseek-chat",
+        "deepseek-chat": "deepseek/deepseek-chat",
     }
     return aliases.get(mid, mid)
+
+
+
+async def plane_api(
+    method: str,
+    path: str,
+    cookie: str = "",
+    csrf: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Call self-hosted Plane REST API (for agent tools)."""
+    url = f"{PLANE_API_BASE}{path}"
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "plane-intelligence/self-host",
+    }
+    if cookie:
+        headers["Cookie"] = cookie
+    if csrf:
+        headers["X-CSRFToken"] = csrf
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.request(method, url, headers=headers, json=payload)
+            try:
+                data = r.json()
+            except Exception:
+                data = {"raw": r.text[:2000]}
+            return {"status": r.status_code, "data": data}
+    except Exception as e:
+        return {"status": 0, "error": str(e)}
+
+
+async def gather_workspace_context(
+    workspace_slug: Optional[str], cookie: str, csrf: str
+) -> str:
+    if not workspace_slug:
+        return ""
+    parts: List[str] = []
+    projects = await plane_api(
+        "GET", f"/api/workspaces/{workspace_slug}/projects/", cookie, csrf
+    )
+    if projects.get("status") == 200:
+        rows = projects.get("data") or []
+        if isinstance(rows, dict):
+            rows = rows.get("results") or rows.get("data") or []
+        names = []
+        for p in (rows or [])[:15]:
+            if isinstance(p, dict):
+                names.append(
+                    f"- {p.get('identifier') or ''} {p.get('name')} (id={p.get('id')})"
+                )
+        if names:
+            parts.append("Projects:\n" + "\n".join(names))
+    pages = await plane_api(
+        "GET", f"/api/workspaces/{workspace_slug}/pages/", cookie, csrf
+    )
+    if pages.get("status") == 200:
+        data = pages.get("data") or {}
+        results = data.get("results") if isinstance(data, dict) else data
+        names = []
+        for p in (results or [])[:15]:
+            if isinstance(p, dict):
+                names.append(f"- {p.get('name') or 'Untitled'} (id={p.get('id')})")
+        if names:
+            parts.append("Wiki pages:\n" + "\n".join(names))
+    return "\n\n".join(parts)
+
+
+async def execute_plane_tools(
+    mode: str,
+    query: str,
+    workspace_slug: Optional[str],
+    cookie: str,
+    csrf: str,
+) -> str:
+    """Agent actions for Build/Autopilot — create work items and wiki pages via Plane API."""
+    if mode not in ("build", "autopilot") or not workspace_slug:
+        return ""
+    q = (query or "").lower()
+    notes: List[str] = []
+
+    if any(k in q for k in ("create work item", "create issue", "add issue", "new issue", "new work item")):
+        projects = await plane_api(
+            "GET", f"/api/workspaces/{workspace_slug}/projects/", cookie, csrf
+        )
+        proj_list = projects.get("data") or []
+        if isinstance(proj_list, dict):
+            proj_list = proj_list.get("results") or []
+        project_id = None
+        for p in proj_list or []:
+            ident = (p.get("identifier") or "").lower()
+            name = (p.get("name") or "").lower()
+            if ident and ident in q:
+                project_id = p.get("id")
+                break
+            if name and name in q:
+                project_id = p.get("id")
+                break
+        if not project_id and proj_list:
+            project_id = proj_list[0].get("id")
+        title = query
+        for sep in ("called ", "titled ", "named ", ": "):
+            if sep in q:
+                title = query[q.index(sep) + len(sep) :].strip(" .\"'")
+                break
+        title = title[:200] or "New work item"
+        if project_id:
+            res = await plane_api(
+                "POST",
+                f"/api/workspaces/{workspace_slug}/projects/{project_id}/issues/",
+                cookie,
+                csrf,
+                {"name": title, "project_id": project_id},
+            )
+            notes.append(f"Create work item result: {json.dumps(res)[:800]}")
+        else:
+            notes.append("Could not resolve a project to create the work item in.")
+
+    if any(k in q for k in ("create wiki", "create page", "new wiki", "new page", "add page")):
+        title = "Untitled"
+        for sep in ("called ", "titled ", "named ", ": "):
+            if sep in q:
+                title = query[q.index(sep) + len(sep) :].strip(" .\"'")[:200]
+                break
+        res = await plane_api(
+            "POST",
+            f"/api/workspaces/{workspace_slug}/pages/",
+            cookie,
+            csrf,
+            {"name": title or "Untitled"},
+        )
+        notes.append(f"Create wiki page result: {json.dumps(res)[:800]}")
+
+    if any(k in q for k in ("my work", "assigned to me", "my issues", "my work items", "what am i working")):
+        res = await plane_api(
+            "GET", f"/api/workspaces/{workspace_slug}/user-issues/", cookie, csrf
+        )
+        if res.get("status") != 200:
+            res = await plane_api(
+                "GET", f"/api/users/me/workspaces/{workspace_slug}/issues/", cookie, csrf
+            )
+        notes.append(f"User work items: {json.dumps(res)[:1200]}")
+
+    return "\n".join(notes)
 
 
 async def llm_stream(messages: List[Dict[str, str]], model: str):
@@ -287,6 +433,14 @@ def healthz():
         "skills": len(SKILLS_SEED),
         "models": len(model_catalog()),
     }
+
+
+@app.get("/cosmic-pilot/wiki")
+def wiki_ui():
+    index = STATIC_DIR / "wiki.html"
+    if not index.exists():
+        return HTMLResponse("<h1>Wiki UI missing</h1>", status_code=500)
+    return FileResponse(index, media_type="text/html")
 
 
 @app.get("/cosmic-pilot/ui")
@@ -453,12 +607,18 @@ async def stream_answer(stream_token: str, request: Request):
 
     chat = CHATS.get(job["chat_id"], {})
     history = chat.get("messages") or []
+    cookie = request.headers.get("cookie") or ""
+    csrf = request.headers.get("x-csrftoken") or ""
+    mode = job.get("mode") or "ask"
     system = (
-        "You are Plane Intelligence (Pilot AI), the AI assistant inside Plane project management. "
-        "Be concise, helpful, and structured. Use markdown when useful. "
-        f"Workspace: {job.get('workspace_slug') or 'unknown'}. Mode: {job.get('mode')}."
+        "You are Plane Intelligence (Pilot AI), the AI assistant inside Plane project management "
+        "(same product as app.plane.so Pilot). Be concise, helpful, and structured. Use markdown. "
+        f"Workspace: {job.get('workspace_slug') or 'unknown'}. Mode: {mode}. "
+        "In Ask mode: answer questions about the workspace. "
+        "In Build mode: help create and edit work items, pages, and plans; when tools ran, explain results. "
+        "In Autopilot mode: proactively suggest and describe multi-step changes. "
+        "Only DeepSeek models are available on this instance."
     )
-    # skill instructions
     if job.get("skill_id") and SKILLS_SEED:
         skill = next((s for s in SKILLS_SEED if s.get("id") == job["skill_id"]), None)
         if skill and skill.get("instructions"):
@@ -467,6 +627,16 @@ async def stream_answer(stream_token: str, request: Request):
     ctx = job.get("context") or {}
     if ctx.get("first_name"):
         system += f" User: {ctx.get('first_name')} {ctx.get('last_name') or ''} ({ctx.get('email') or ''})."
+
+    # Pull live workspace context + optional agent tool results
+    ws_ctx = await gather_workspace_context(job.get("workspace_slug"), cookie, csrf)
+    if ws_ctx:
+        system += "\n\nWorkspace snapshot:\n" + ws_ctx
+    tool_notes = await execute_plane_tools(
+        mode, job.get("query") or "", job.get("workspace_slug"), cookie, csrf
+    )
+    if tool_notes:
+        system += "\n\nTool results from this turn (use these facts):\n" + tool_notes
 
     msgs = [{"role": "system", "content": system}]
     for m in history[-12:]:
@@ -535,6 +705,58 @@ async def stream_answer(stream_token: str, request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/api/v1/chat/get-answer/")
+async def get_answer_legacy(request: Request):
+    """Compatibility with older EE pi-chat store (non-SSE)."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    chat_id = body.get("chat_id") or str(uuid.uuid4())
+    query = body.get("query") or body.get("prompt") or ""
+    cookie = request.headers.get("cookie") or ""
+    csrf = request.headers.get("x-csrftoken") or ""
+    mode = body.get("mode") or "ask"
+    llm = body.get("llm") or DEFAULT_MODEL_ID
+    ws = body.get("workspace_slug")
+    system = (
+        "You are Plane Intelligence (Pilot AI). Be helpful and concise. "
+        f"Workspace: {ws or 'unknown'}. Mode: {mode}."
+    )
+    ws_ctx = await gather_workspace_context(ws, cookie, csrf)
+    if ws_ctx:
+        system += "\n\n" + ws_ctx
+    tool_notes = await execute_plane_tools(mode, query, ws, cookie, csrf)
+    if tool_notes:
+        system += "\n\nTool results:\n" + tool_notes
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": query}]
+    chunks: List[str] = []
+    async for chunk in llm_stream(msgs, llm):
+        chunks.append(chunk)
+    answer = "".join(chunks)
+    CHATS[chat_id] = {
+        "chat_id": chat_id,
+        "title": (query[:48] + ("…" if len(query) > 48 else "")) or "New Conversation",
+        "workspace_slug": ws,
+        "workspace_id": body.get("workspace_id"),
+        "llm": llm,
+        "mode": mode,
+        "created_at": now_iso(),
+        "last_modified": now_iso(),
+        "is_favorite": False,
+        "messages": [
+            {"role": "user", "content": query, "ts": now_iso()},
+            {"role": "assistant", "content": answer, "ts": now_iso()},
+        ],
+        "owner": user_key(request),
+        "dialogue": [{"query": query, "answer": answer, "llm": llm}],
+        "is_websearch_enabled": False,
+        "mcp_connector_ids": [],
+    }
+    return {"answer": answer, "chat_id": chat_id, "response": answer}
+
 
 
 @app.get("/api/v1/chat/get-user-threads/")
