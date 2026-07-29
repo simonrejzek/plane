@@ -1,3 +1,60 @@
+/*__PLANE_SELFHOST_BOOTSTRAP__*/
+(function(){
+  try{
+    window.__PLANE_SELFHOST__={piBase:"",apiBase:"",localLlm:true};
+    var blocked=["pi.plane.so","api.plane.so","silo.plane.so","flux.plane.so"];
+    function rewrite(input){
+      try{
+        var u=typeof input==="string"?input:(input&&input.url)||"";
+        if(!u) return input;
+        for(var i=0;i<blocked.length;i++){
+          var h=blocked[i];
+          if(u.indexOf("https://"+h)===0) return u.split("https://"+h).join("");
+          if(u.indexOf("http://"+h)===0) return u.split("http://"+h).join("");
+        }
+        return typeof input==="string"?u:input;
+      }catch(e){return input}
+    }
+    function patch(url,data){
+      try{
+        if(!data||typeof data!=="object") return data;
+        if(/\/api\/workspaces\/[^/]+\/features\/?/.test(url)||/\/features\/?$/.test(url)){
+          data.is_pi_enabled=true; data.is_wiki_enabled=true;
+        }
+        if(data.product==="FREE"||data.product==="free") data.product="BUSINESS";
+        if(data.current_plan==="FREE") data.current_plan="BUSINESS";
+        if(Array.isArray(data)&&url.indexOf("workspaces")!==-1){
+          data.forEach(function(w){ if(w&&(!w.current_plan||w.current_plan==="FREE")) w.current_plan="BUSINESS"; });
+        }
+        if(data.values&&typeof data.values==="object"&&url.indexOf("/api/v1/flags")!==-1){
+          Object.keys(data.values).forEach(function(k){ if(k.indexOf("AI_")==0) data.values[k]=true; });
+        }
+      }catch(e){}
+      return data;
+    }
+    var _f=window.fetch;
+    window.fetch=function(input,init){
+      var rew=rewrite(input);
+      var urlStr=typeof rew==="string"?rew:(rew&&rew.url)||String(input);
+      return _f.call(this,rew,init).then(function(res){
+        var ct=(res.headers&&res.headers.get&&res.headers.get("content-type"))||"";
+        if(ct.indexOf("application/json")===-1) return res;
+        // only soft-patch feature/plan endpoints; never break other JSON
+        if(!/features|workspaces|flags|subscription|plan/i.test(urlStr)) return res;
+        return res.clone().json().then(function(data){
+          var p=patch(urlStr,data);
+          if(p===data) return res;
+          return new Response(JSON.stringify(p),{status:res.status,statusText:res.statusText,headers:{"content-type":"application/json"}});
+        }).catch(function(){return res});
+      });
+    };
+    var _ES=window.EventSource;
+    if(_ES){
+      window.EventSource=function(url,conf){ return new _ES(rewrite(url),conf); };
+      window.EventSource.prototype=_ES.prototype;
+    }
+  }catch(e){ console.error("selfhost bootstrap", e); }
+})();
 (function(){try{var e=typeof window<`u`?window:typeof global<`u`?global:typeof globalThis<`u`?globalThis:typeof self<`u`?self:{};e.SENTRY_RELEASE={id:`0077f92838c1ecce1c3ce71ae3d1ce1c9d2a4137`};var t=new e.Error().stack;t&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[t]=`a4614a27-b4bf-49c1-996a-ce3f85b58134`,e._sentryDebugIdIdentifier=`sentry-dbid-a4614a27-b4bf-49c1-996a-ce3f85b58134`)}catch{}})();import{n as e,o as t}from"./rolldown-runtime-201nhtia.js";import{a as n,l as r,r as i,t as a}from"./client-CxSyHIcC.js";import{C as o,L as s,S as c,T as l,_ as u,b as d,f,g as p,h as ee,l as te,m,n as h,p as ne,r as g,t as _,u as v,v as y,x as b,y as x}from"./chunk-IJF3QNGC-D_ocRA8b.js";import{a as S,i as C,n as w,t as re}from"./index.client-CwzkeuNF.js";import{t as T}from"./react-dom-ov8M47Bz.js";import{t as E}from"./client-DCIGWaXM.js";import{r as D,t as O}from"./stale-asset-error-DSmHDtkX.js";import{t as k}from"./jsx-runtime-Bl8ISwLc.js";function A(e){return P.createElement(v,{flushSync:F.flushSync,...e})}function j(){if(!L&&window.__reactRouterContext&&window.__reactRouterManifest&&window.__reactRouterRouteModules){if(window.__reactRouterManifest.sri===!0){let e=document.querySelector(`script[rr-importmap]`);if(e?.textContent)try{window.__reactRouterManifest.sri=JSON.parse(e.textContent).integrity}catch(e){console.error(`Failed to parse import map`,e)}}L={context:window.__reactRouterContext,manifest:window.__reactRouterManifest,routeModules:window.__reactRouterRouteModules,stateDecodingPromise:void 0,router:void 0,routerInitialized:!1}}}function M({getContext:e,instrumentations:t}){if(j(),!L)throw Error("You must be using the SSR features of React Router in order to skip passing a `router` prop to `<RouterProvider>`");let n=L;if(!L.stateDecodingPromise){let e=L.context.stream;c(e,`No stream found for single fetch decoding`),L.context.stream=void 0,L.stateDecodingPromise=u(e,window).then(e=>{L.context.state=e.value,n.stateDecodingPromise.value=!0}).catch(e=>{n.stateDecodingPromise.error=e})}if(L.stateDecodingPromise.error)throw L.stateDecodingPromise.error;if(!L.stateDecodingPromise.value)throw L.stateDecodingPromise;let r=ne(L.manifest.routes,L.routeModules,L.context.state,L.context.ssr,L.context.isSpaMode),i;if(L.context.isSpaMode){let{loaderData:e}=L.context.state;L.manifest.routes.root?.hasLoader&&e&&`root`in e&&(i={loaderData:{root:e.root}})}else i=_({state:L.context.state,routes:r,getRouteInfo:e=>({clientLoader:L.routeModules[e]?.clientLoader,hasLoader:L.manifest.routes[e]?.hasLoader===!0,hasHydrateFallback:L.routeModules[e]?.HydrateFallback!=null}),location:window.location,basename:window.__reactRouterContext?.basename,isSpaMode:L.context.isSpaMode});window.history.state&&window.history.state.masked&&window.history.replaceState({...window.history.state,masked:void 0},``);let a=p({routes:r,history:f(),basename:L.context.basename,getContext:e,hydrationData:i,hydrationRouteProperties:d,instrumentations:t,mapRouteProperties:o,future:{v8_passThroughRequests:L.context.future.v8_passThroughRequests},dataStrategy:x(()=>a,L.manifest,L.routeModules,L.context.ssr,L.context.basename,L.context.future.v8_trailingSlashAwareDataRequests),patchRoutesOnNavigation:y(()=>a,L.manifest,L.routeModules,L.context.ssr,L.context.routeDiscovery,L.context.isSpaMode,L.context.basename)});return L.router=a,a.state.initialized&&(L.routerInitialized=!0,a.initialize()),a.createRoutesForHMR=m,window.__reactRouterDataRouter=a,a}function N(e){R||=M({getContext:e.getContext,instrumentations:e.instrumentations});let[t,n]=I.useState(void 0);I.useEffect(()=>{},[]),I.useEffect(()=>{},[t]);let[r,i]=I.useState(R.state.location);return I.useLayoutEffect(()=>{L&&L.router&&!L.routerInitialized&&(L.routerInitialized=!0,L.router.initialize())},[]),I.useLayoutEffect(()=>{if(L&&L.router)return L.router.subscribe(e=>{e.location!==r&&i(e.location)})},[r]),c(L,`ssrInfo unavailable for HydratedRouter`),l(R,L.manifest,L.routeModules,L.context.ssr,L.context.routeDiscovery,L.context.isSpaMode),I.createElement(I.Fragment,null,I.createElement(g.Provider,{value:{manifest:L.manifest,routeModules:L.routeModules,future:L.context.future,criticalCss:t,ssr:L.context.ssr,isSpaMode:L.context.isSpaMode,routeDiscovery:L.context.routeDiscovery}},I.createElement(te,{location:r},I.createElement(A,{router:R,useTransitions:e.useTransitions,onError:e.onError}))),I.createElement(I.Fragment,null))}var P,F,I,L,R,z=e((()=>{h(),b(),P=t(s(),1),F=t(T(),1),I=t(s(),1),s(),T(),L=null,R=null,ee()})),B,V,H=e((()=>{B=`
 ███▄▄   ██▄▄    ██▄▄
 ███████▄███████▄██████▄▄              ▄▄▄▄▄▄▄▄▄    ▄▄
