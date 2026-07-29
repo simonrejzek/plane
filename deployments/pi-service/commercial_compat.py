@@ -831,7 +831,7 @@ def register_commercial_compat(app: FastAPI) -> None:
         out = dict(body)
         inst = dict(out.get("instance") or {})
         # Mobile app gate: advertise CE commercial version for mobile (1.12.0+ per Plane docs; App Store app is 2.3.1)
-        spoof = os.environ.get("PLANE_SPOOF_VERSION") or "3.0.0"
+        spoof = os.environ.get("PLANE_SPOOF_VERSION") or "2.3.1"
         inst["current_version"] = spoof
         inst["latest_version"] = spoof
         inst["edition"] = inst.get("edition") or "PLANE_BUSINESS"
