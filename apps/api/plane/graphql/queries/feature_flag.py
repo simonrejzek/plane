@@ -132,4 +132,5 @@ class FeatureFlagQuery:
             editor_advanced_mentions=feature_flags.get("EDITOR_ADVANCED_MENTIONS", False),
             editor_video_attachments=feature_flags.get("EDITOR_VIDEO_ATTACHMENTS", False),
             link_pages=feature_flags.get("LINK_PAGES", False),
+            initiatives=feature_flags.get("INITIATIVES", False),
         )

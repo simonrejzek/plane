@@ -61,4 +61,5 @@ class FeatureFlagType:
     editor_advanced_mentions: bool = False
     editor_video_attachments: bool = False
     link_pages: bool = False
+    initiatives: bool = False
 

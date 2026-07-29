@@ -18,12 +18,16 @@ class NotificationType:
     id: strawberry.ID
     title: str
     message: Optional[JSON]
-    message_html = Optional[str]
-    message_stripped = Optional[str]
+    message_html: Optional[str]
+    message_stripped: Optional[str]
     sender: str
     triggered_by: Optional[UserType]
     receiver: strawberry.ID
     read_at: Optional[datetime]
+    # Official mobile NotificationsQuery
+    is_epic: Optional[bool] = False
+    is_intake_issue: Optional[bool] = False
+    intake_id: Optional[strawberry.ID] = None
     snoozed_till: Optional[datetime]
     archived_at: Optional[datetime]
     entity_name: str

@@ -16,6 +16,7 @@ from .queries.label import LabelQuery, WorkspaceLabelQuery
 from .queries.state import StateQuery, WorkspaceStateQuery
 from .queries.notification import NotificationQuery
 from .queries.mobile_home import MobileHomeQuery
+from .queries.workspace_features import WorkspaceFeaturesQuery
 from .queries.issue import (
     IssuesInformationQuery,
     IssueQuery,
@@ -159,6 +160,7 @@ class Query(
     TimezoneListQuery,
     StickyQuery,
     MobileHomeQuery,
+    WorkspaceFeaturesQuery,
     WorkItemCommentReactionQuery,
     MobileNestedPagesQuery,
     InitiativesCountQuery,
