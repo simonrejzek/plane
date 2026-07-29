@@ -247,8 +247,8 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-if STATIC_DIR.exists():
-    app.mount("/cosmic-pilot/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# Static files are served by cosmic_static_asset() with Cache-Control: no-store
+# (mounting StaticFiles cached the old dark wiki/pilot CSS in browsers/CDN).
 
 
 def _is_deepseek(model_id: str) -> bool:
@@ -1255,18 +1255,43 @@ def inject_js():
     return _inject_response()
 
 
+@app.get("/cosmic-pilot/static/{asset_path:path}")
+def cosmic_static_asset(asset_path: str):
+    """Serve static with no-cache so wiki/AI CSS isn't stuck on old dark void tokens."""
+    # Prevent path escape
+    safe = Path(asset_path)
+    if ".." in safe.parts:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    path = STATIC_DIR / safe
+    if not path.is_file():
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    media = "application/octet-stream"
+    if path.suffix == ".css":
+        media = "text/css"
+    elif path.suffix == ".js":
+        media = "application/javascript"
+    elif path.suffix == ".html":
+        media = "text/html"
+    return FileResponse(
+        path,
+        media_type=media,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Workspace Wiki API — cloud-compatible paths (proxied here from Caddy)
 # ---------------------------------------------------------------------------
 
 
 # Also expose under /api/v1/wiki/... so routing always hits PI (Caddy /api/v1/* → pi)
-@app.get("/api/v1/wiki/workspaces/{slug}/pages/")
-@app.get("/api/workspaces/{slug}/pages/")
-def wiki_list_pages(slug: str, cursor: Optional[str] = None, per_page: int = 100):
+def _wiki_page_results(slug: str) -> List[Dict[str, Any]]:
     pages = list(load_wiki(slug).values())
     pages.sort(key=lambda p: p.get("updated_at") or "", reverse=True)
-    results = [page_public(p, include_body=False) for p in pages]
+    return [page_public(p, include_body=False) for p in pages]
+
+
+def _wiki_list_payload(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "grouped_by": None,
         "sub_grouped_by": None,
@@ -1285,6 +1310,140 @@ def wiki_list_pages(slug: str, cursor: Optional[str] = None, per_page: int = 100
         "extra_stats": None,
         "results": results,
     }
+
+
+@app.get("/api/v1/wiki/workspaces/{slug}/pages/")
+@app.get("/api/workspaces/{slug}/pages/")
+def wiki_list_pages(slug: str, cursor: Optional[str] = None, per_page: int = 100):
+    return _wiki_list_payload(_wiki_page_results(slug))
+
+
+@app.get("/api/workspaces/{slug}/pages-lite/")
+@app.get("/api/workspaces/{slug}/pages-lite")
+def wiki_pages_lite(slug: str, request: Request):
+    """Commercial SPA wiki sidebar: PageService.pagesLite / liteByIds."""
+    results = _wiki_page_results(slug)
+    # Optional id filter: ?ids=a,b,c
+    raw_ids = request.query_params.get("ids") or ""
+    wanted = {x.strip() for x in raw_ids.split(",") if x.strip()}
+    if wanted:
+        results = [r for r in results if str(r.get("id")) in wanted]
+    # owned_by filter (comma list)
+    raw_owners = request.query_params.get("owned_by") or ""
+    owners = {x.strip() for x in raw_owners.split(",") if x.strip()}
+    if owners:
+        results = [r for r in results if str(r.get("owned_by") or "") in owners or r.get("owned_by") is None]
+    return _wiki_list_payload(results)
+
+
+@app.get("/api/workspaces/{slug}/pages-summary/")
+@app.get("/api/workspaces/{slug}/pages-summary")
+def wiki_pages_summary(slug: str):
+    """Commercial SPA: pagesSummary.public_pages + private_pages + archived_pages."""
+    pages = list(load_wiki(slug).values())
+    public_n = 0
+    private_n = 0
+    archived_n = 0
+    for p in pages:
+        if p.get("archived_at"):
+            archived_n += 1
+            continue
+        # access: 0 public-ish, non-zero private (CE/cloud convention varies)
+        try:
+            access = int(p.get("access") or 0)
+        except Exception:
+            access = 0
+        if access == 0:
+            public_n += 1
+        else:
+            private_n += 1
+    return {
+        "public_pages": public_n,
+        "private_pages": private_n,
+        "archived_pages": archived_n,
+        "total_pages": public_n + private_n + archived_n,
+        "count": public_n + private_n + archived_n,
+    }
+
+
+@app.get("/api/workspaces/{slug}/projects/{project_id}/pages-summary/")
+@app.get("/api/workspaces/{slug}/projects/{project_id}/pages-summary")
+def wiki_project_pages_summary(slug: str, project_id: str):
+    return wiki_pages_summary(slug)
+
+
+@app.get("/api/workspaces/{slug}/favorite-pages/")
+@app.get("/api/workspaces/{slug}/favorite-pages")
+@app.get("/api/workspaces/{slug}/favorite-pages/{page_id}/")
+@app.get("/api/workspaces/{slug}/favorite-pages/{page_id}")
+def wiki_favorite_pages(slug: str, page_id: Optional[str] = None):
+    pages = [p for p in load_wiki(slug).values() if p.get("is_favorite")]
+    if page_id:
+        pages = [p for p in pages if str(p.get("id")) == page_id]
+    return _wiki_list_payload([page_public(p, include_body=False) for p in pages])
+
+
+@app.post("/api/workspaces/{slug}/favorite-pages/{page_id}/")
+@app.post("/api/workspaces/{slug}/favorite-pages/{page_id}")
+@app.delete("/api/workspaces/{slug}/favorite-pages/{page_id}/")
+@app.delete("/api/workspaces/{slug}/favorite-pages/{page_id}")
+async def wiki_favorite_toggle(slug: str, page_id: str, request: Request):
+    pages = load_wiki(slug)
+    page = pages.get(page_id)
+    if not page:
+        return JSONResponse({"error": "Page not found."}, status_code=404)
+    page["is_favorite"] = request.method.upper() == "POST"
+    page["updated_at"] = now_iso()
+    pages[page_id] = page
+    save_wiki(slug, pages)
+    return page_public(page, include_body=False)
+
+
+@app.get("/api/workspaces/{slug}/pages/{page_id}/sub-pages/")
+@app.get("/api/workspaces/{slug}/pages/{page_id}/sub-pages")
+@app.get("/api/workspaces/{slug}/pages/{page_id}/parent-pages/")
+@app.get("/api/workspaces/{slug}/pages/{page_id}/parent-pages")
+def wiki_page_relations(slug: str, page_id: str):
+    return _wiki_list_payload([])
+
+
+@app.get("/api/workspaces/{slug}/page-labels/")
+@app.get("/api/workspaces/{slug}/page-labels")
+def wiki_page_labels(slug: str):
+    return []
+
+
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/lock/", methods=["GET", "POST", "DELETE"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/lock", methods=["GET", "POST", "DELETE"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/archive/", methods=["GET", "POST", "DELETE"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/archive", methods=["GET", "POST", "DELETE"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/publish/", methods=["GET", "POST", "DELETE"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/publish", methods=["GET", "POST", "DELETE"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/access/", methods=["GET", "POST", "PATCH"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/access", methods=["GET", "POST", "PATCH"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/duplicate/", methods=["POST"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/duplicate", methods=["POST"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/move/", methods=["POST"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/move", methods=["POST"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/mentions/", methods=["GET"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/embeds/", methods=["GET"])
+@app.api_route("/api/workspaces/{slug}/pages/{page_id}/exports/", methods=["GET", "POST"])
+async def wiki_page_side_stubs(slug: str, page_id: str, request: Request):
+    """Soft stubs so commercial wiki chrome doesn't 404-spin."""
+    if request.method == "GET":
+        if request.url.path.rstrip("/").endswith("mentions") or request.url.path.rstrip("/").endswith("embeds"):
+            return []
+        pages = load_wiki(slug)
+        page = pages.get(page_id)
+        if page:
+            return page_public(page, include_body=False)
+        return JSONResponse({"error": "Page not found."}, status_code=404)
+    # POST/PATCH/DELETE — acknowledge
+    pages = load_wiki(slug)
+    page = pages.get(page_id)
+    if page:
+        return page_public(page, include_body=False)
+    return {"ok": True}
 
 
 @app.post("/api/v1/wiki/workspaces/{slug}/pages/")

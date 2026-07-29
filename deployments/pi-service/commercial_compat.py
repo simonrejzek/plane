@@ -885,10 +885,11 @@ def register_commercial_compat(app: FastAPI) -> None:
     @app.get("/api/workspaces/{slug}/projects/{project_id}/issues/total-count/")
     @app.get("/api/workspaces/{slug}/projects/{project_id}/issues/total-count")
     async def issues_total_count(slug: str, project_id: str, request: Request):
-        """Commercial kanban getWorkItemTotalCount — synthesize from CE issues list."""
-        err_status, role, err_body = await resolve_membership(slug, request)
-        if err_status is not None:
-            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        """Commercial kanban getWorkItemTotalCount — synthesize from CE issues list.
+
+        Do NOT gate on resolve_membership: CE already enforces auth. A flaky
+        membership probe was blanking the board while project meta still showed 21.
+        """
         q = clean_ce_issue_params(dict(request.query_params))
         # Prefer a tiny page just for totals
         q.setdefault("per_page", "1")
@@ -914,10 +915,10 @@ def register_commercial_compat(app: FastAPI) -> None:
 
         Cleans commercial-only query params, maps group_by aliases to CE allowlist,
         and normalizes the response for processIssueResponse.
+
+        Auth is delegated to CE (cookie/session). We intentionally skip PI
+        resolve_membership so a membership-endpoint mismatch cannot blank the board.
         """
-        err_status, role, err_body = await resolve_membership(slug, request)
-        if err_status is not None:
-            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         q = clean_ce_issue_params(dict(request.query_params))
         status, body, _ = await ce_get(
             f"/api/workspaces/{slug}/projects/{project_id}/issues/",
@@ -961,9 +962,6 @@ def register_commercial_compat(app: FastAPI) -> None:
 
         SPA calls user-work-items/{id}/total-count/ but CE only has user-issues/{id}/.
         """
-        err_status, role, err_body = await resolve_membership(slug, request)
-        if err_status is not None:
-            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         q = clean_ce_issue_params(dict(request.query_params))
         q.setdefault("per_page", "1")
         q.setdefault("cursor", "1:0:0")
@@ -986,9 +984,6 @@ def register_commercial_compat(app: FastAPI) -> None:
     @app.get("/api/workspaces/{slug}/user-work-items/{user_id}")
     async def user_work_items_list(slug: str, user_id: str, request: Request):
         """Alias commercial user-work-items list → CE user-issues (normalized)."""
-        err_status, role, err_body = await resolve_membership(slug, request)
-        if err_status is not None:
-            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         q = clean_ce_issue_params(dict(request.query_params))
         status, body, _ = await ce_get(
             f"/api/workspaces/{slug}/user-issues/{user_id}/",
@@ -1608,10 +1603,8 @@ def register_commercial_compat(app: FastAPI) -> None:
         """Commercial SPA loads state labels/colors via states-lite?ids=...
 
         getStatesByIds / getWorkspaceStatesLite expect a bare array body.
+        Auth delegated to CE — no PI membership hard-gate (blanked kanban columns).
         """
-        err_status, role, err_body = await resolve_membership(slug, request)
-        if err_status is not None:
-            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         raw_ids = request.query_params.get("ids") or request.query_params.get("id") or ""
         wanted = {x.strip() for x in raw_ids.split(",") if x.strip()}
         raw_pids = request.query_params.get("project_ids") or ""
@@ -1619,6 +1612,11 @@ def register_commercial_compat(app: FastAPI) -> None:
 
         # CE: workspace-level states list (all projects)
         status, body, _ = await ce_get(f"/api/workspaces/{slug}/states/", request)
+        if status in (401, 403):
+            return JSONResponse(
+                body if isinstance(body, (dict, list)) else {"detail": str(body)},
+                status_code=status,
+            )
         rows: List[Dict[str, Any]] = []
         if status == 200:
             if isinstance(body, list):
@@ -1678,17 +1676,23 @@ def register_commercial_compat(app: FastAPI) -> None:
     @app.get("/api/workspaces/{slug}/projects/{project_id}/states-lite/")
     async def project_states_lite(slug: str, project_id: str, request: Request):
         """SPA getStatesLite expects data.results; listStatesLite expects paginated body."""
-        err_status, role, err_body = await resolve_membership(slug, request)
-        if err_status is not None:
-            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         raw_ids = request.query_params.get("ids") or ""
         wanted = {x.strip() for x in raw_ids.split(",") if x.strip()}
         status, body, _ = await ce_get(
             f"/api/workspaces/{slug}/projects/{project_id}/states/", request
         )
+        if status in (401, 403):
+            return JSONResponse(
+                body if isinstance(body, (dict, list)) else {"detail": str(body)},
+                status_code=status,
+            )
         rows: List[Dict[str, Any]] = []
         if status == 200 and isinstance(body, list):
             rows = [x for x in body if isinstance(x, dict)]
+        elif status == 200 and isinstance(body, dict):
+            maybe = body.get("results") or body.get("data") or []
+            if isinstance(maybe, list):
+                rows = [x for x in maybe if isinstance(x, dict)]
         if wanted:
             rows = [r for r in rows if str(r.get("id")) in wanted]
         out = [_normalize_state_lite(r, project_id) for r in rows]

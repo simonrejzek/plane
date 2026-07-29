@@ -34,19 +34,19 @@ jobs:
           file: deployments/pi-service/Dockerfile
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v23
             ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v22
-            ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v21
-            ghcr.io/${{ github.repository_owner }}/plane-pi:commercial-compat-v7
+            ghcr.io/${{ github.repository_owner }}/plane-pi:commercial-compat-v8
             ghcr.io/${{ github.repository_owner }}/plane-pi:preview
 
       - name: Mirror to public ttl.sh
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v22
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v22 ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v22
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v22 ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v21
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v22 ttl.sh/cosmicboosts-plane-pi:commercial-compat-v7
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v23
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v23 ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v23
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v23 ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v22
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v23 ttl.sh/cosmicboosts-plane-pi:commercial-compat-v8
+          docker push ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v23
           docker push ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v22
-          docker push ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v21
-          docker push ttl.sh/cosmicboosts-plane-pi:commercial-compat-v7
+          docker push ttl.sh/cosmicboosts-plane-pi:commercial-compat-v8
