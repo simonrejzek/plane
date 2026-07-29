@@ -39,6 +39,8 @@ OWNER_PERMISSIONS: Dict[str, Any] = _load(
 BUSINESS_FLAGS: Dict[str, Any] = _load("business_flags.json", {"values": {}})
 WORKSPACE_ROLES: List[Dict[str, Any]] = _load("workspace_roles.json", [])
 
+PREF_STORE: Dict[str, Dict[str, Any]] = {}
+
 SELFHOST_PLAN = {
     "is_cancelled": False,
     "purchased_seats": 9999,
@@ -525,11 +527,26 @@ def register_commercial_compat(app: FastAPI) -> None:
         return []
 
     @app.get("/api/workspaces/{slug}/preferences/")
-    async def workspace_preferences(slug: str, request: Request):
+    async def workspace_preferences_get(slug: str, request: Request):
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        return {}
+        return PREF_STORE.get(slug, {})
+
+    @app.api_route("/api/workspaces/{slug}/preferences/", methods=["PATCH", "PUT", "POST"])
+    async def workspace_preferences_write(slug: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        try:
+            patch = await request.json()
+        except Exception:
+            patch = {}
+        cur = dict(PREF_STORE.get(slug, {}))
+        if isinstance(patch, dict):
+            cur.update(patch)
+        PREF_STORE[slug] = cur
+        return cur
 
     @app.get("/api/workspaces/{slug}/workflows/")
     async def workflows(slug: str, request: Request):
