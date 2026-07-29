@@ -13,6 +13,16 @@
 
 	# Plane Intelligence (Pilot AI) — before generic /api/*
 	reverse_proxy /api/v1/* pi:8080
+	# Force no-store on Pilot static so Cloudflare cannot serve stale dark CSS
+	@cosmic_static path_regexp ^/cosmic-pilot/static/
+	handle @cosmic_static {
+		header {
+			Cache-Control "no-cache, no-store, must-revalidate"
+			Pragma "no-cache"
+			CDN-Cache-Control "no-store"
+		}
+		reverse_proxy pi:8080
+	}
 	reverse_proxy /cosmic-pilot/* pi:8080
 	reverse_proxy /cosmic-pilot-inject.js pi:8080
 	# Patched English i18n (ICU plurals expanded) — override SPA asset.
@@ -205,7 +215,8 @@
 	reverse_proxy @silo pi:8080
 
 	# Wiki pages live on PI (CE lacks workspace-level pages API)
-	@ws_wiki_pages path_regexp ^/api/workspaces/[^/]+/pages
+	# pages, pages-lite, pages-summary, page-labels, favorite-pages
+	@ws_wiki_pages path_regexp ^/api/workspaces/[^/]+/(pages|pages-lite|pages-summary|page-labels|favorite-pages)
 	reverse_proxy @ws_wiki_pages pi:8080
 
 	# CE API (projects, issues, modules, labels, worklogs, auth, …)
