@@ -24,6 +24,11 @@
 	reverse_proxy /{$BUCKET_NAME}/* plane-minio:9000
 	reverse_proxy /{$BUCKET_NAME} plane-minio:9000
 
+	# Plane Intelligence (Pilot AI) — DeepSeek-only self-host PI service
+	reverse_proxy /api/v1/* pi:8080
+	reverse_proxy /cosmic-pilot/* pi:8080
+	reverse_proxy /cosmic-pilot-inject.js pi:8080
+
 	# SPA routes including /m/auth
 	reverse_proxy /* web:3000
 }
