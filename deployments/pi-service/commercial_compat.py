@@ -367,7 +367,21 @@ def register_commercial_compat(app: FastAPI) -> None:
         values = dict((BUSINESS_FLAGS or {}).get("values") or BUSINESS_FLAGS or {})
         for k in list(values.keys()):
             values[k] = True
-        values.update({"APP_RAIL": True, "AI_CHAT": True, "AI_CONVERSE": True})
+        values.update(
+            {
+                "APP_RAIL": True,
+                "AI_CHAT": True,
+                "AI_CONVERSE": True,
+                "AI_AUTOPILOT": True,
+                "PI_CHAT": True,
+                "PI_CHAT_MOBILE": True,
+                "PI_DEDUPE": True,
+                "PI_DEDUPE_MOBILE": True,
+                "WORKSPACE_PAGES": True,
+                "NESTED_PAGES": True,
+                "EDITOR_AI_OPS": True,
+            }
+        )
         return {"values": values}
 
     @app.get("/api/workspaces/{slug}/features/")
@@ -831,22 +845,32 @@ def register_commercial_compat(app: FastAPI) -> None:
         out = dict(body)
         inst = dict(out.get("instance") or {})
         # Valid semver required (string "latest" breaks some app parsers → Loading failed).
-        # 3.0.0 requested for commercial mobile client; AI/Pilot is unlocked via feature flags + has_llm_configured.
+        # 3.0.0 matches commercial mobile; PLANE_CLOUD + not self-managed unlocks Pilot AI rail.
         spoof = (os.environ.get("PLANE_SPOOF_VERSION") or "3.0.0").strip() or "3.0.0"
+        edition = (os.environ.get("PLANE_SPOOF_EDITION") or "PLANE_CLOUD").strip() or "PLANE_CLOUD"
         inst["current_version"] = spoof
         inst["latest_version"] = spoof
-        inst["edition"] = inst.get("edition") or "PLANE_BUSINESS"
+        inst["edition"] = edition
         inst["is_current_version_deprecated"] = False
         out["instance"] = inst
         cfg = dict(out.get("config") or {})
-        cfg.setdefault("has_llm_configured", True)
+        cfg["has_llm_configured"] = True
         cfg.setdefault("is_email_password_enabled", True)
         # Keep magic off unless SMTP works — avoid empty "continue" into magic code
         cfg.setdefault("is_magic_login_enabled", False)
         cfg.setdefault("enable_turnstile", False)
-        cfg["is_self_managed"] = True
-        cfg["app_base_url"] = cfg.get("app_base_url") or f"https://{os.environ.get('APP_DOMAIN', 'plane.cosmicboosts.store')}"
+        # Official mobile hides Pilot when is_self_managed=true (cloud clients expect SaaS surface).
+        # Override with PLANE_SPOOF_SELF_MANAGED=1 only if you need self-host admin banners.
+        cfg["is_self_managed"] = os.environ.get("PLANE_SPOOF_SELF_MANAGED", "0").strip() == "1"
+        domain = os.environ.get("APP_DOMAIN", "plane.cosmicboosts.store")
+        base = f"https://{domain}"
+        cfg["app_base_url"] = cfg.get("app_base_url") or base
         cfg["space_base_url"] = cfg.get("space_base_url") or cfg["app_base_url"]
+        # Cloud-like config keys some commercial clients probe for AI/product servers
+        cfg.setdefault("payment_server_base_url", base)
+        cfg.setdefault("feature_flag_server_base_url", base)
+        cfg.setdefault("prime_server_base_url", base)
+        cfg.setdefault("silo_base_url", base)
         out["config"] = cfg
         return out
 

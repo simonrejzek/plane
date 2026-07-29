@@ -1419,11 +1419,24 @@ async def wiki_patch_description(slug: str, page_id: str, request: Request):
 
 
 @app.get("/api/v1/chat/get-models/")
+@app.get("/api/v1/chat/get-models")
 def get_models(workspace_id: Optional[str] = None):
     return {"models": model_catalog()}
 
 
+@app.get("/api/v1/models")
+@app.get("/api/v1/models/")
+@app.get("/api/v1/models/list/")
+@app.get("/api/v1/models/list")
+def get_models_alias(workspace_id: Optional[str] = None):
+    """Official mobile probes /api/v1/models; cloud PI also exposes get-models under chat/."""
+    catalog = model_catalog()
+    # Some clients expect {models:[...]}, others a bare list
+    return {"models": catalog, "results": catalog, "count": len(catalog)}
+
+
 @app.get("/api/v1/chat/start/auth-check/")
+@app.get("/api/v1/chat/start/auth-check")
 def auth_check(
     workspace_slug: Optional[str] = Query(None),
     workspace_id: Optional[str] = Query(None),
@@ -1443,6 +1456,7 @@ def auth_check(
 
 
 @app.get("/api/v1/flags/")
+@app.get("/api/v1/flags")
 def flags(workspace_slug: Optional[str] = None):
     return {
         "values": {
@@ -1458,6 +1472,18 @@ def flags(workspace_slug: Optional[str] = None):
             "AI_PAGES_EDIT": True,
             "AI_AUTOPILOT": True,
             "AI_SKILLS": True,
+            # Mobile product surface — Pilot AI + app rail + pages
+            "PI_CHAT": True,
+            "PI_CHAT_MOBILE": True,
+            "PI_DEDUPE": True,
+            "PI_DEDUPE_MOBILE": True,
+            "PI_CONVERSE": True,
+            "PI_ACTIONS": True,
+            "APP_RAIL": True,
+            "WORKSPACE_PAGES": True,
+            "NESTED_PAGES": True,
+            "PAGE_PUBLISH": True,
+            "EDITOR_AI_OPS": True,
         }
     }
 
