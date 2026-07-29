@@ -65,26 +65,29 @@ def patch_text(text: str) -> tuple[str, int]:
 def ensure_epic_migration_fallbacks() -> None:
     """Commercial SPA expects product_tour.epic_migration.* — self-host may miss that ns.
     Keep English copy fallbacks so users never see raw i18n key strings."""
-    targets = list(ROOT.glob("epic-migration-*.js"))
+    # Only the modal bundle uses product_tour.epic_migration keys; ignore docs-url chunks.
+    targets = [
+        p
+        for p in ROOT.glob("epic-migration-*.js")
+        if "product_tour.epic_migration" in p.read_text(encoding="utf-8", errors="ignore")
+    ]
     if not targets:
-        print("warn: no epic-migration-*.js found")
-        return
+        print("ERROR: no epic-migration modal bundle with product_tour keys found")
+        raise SystemExit(2)
     needle = "Epics is now a work item type"
     for path in targets:
         raw = path.read_text(encoding="utf-8")
-        if needle in raw and "||F[e].title" in raw:
-            print(f"ok epic fallbacks: {path.name}")
-            # cache-bust tour media (stale SPA HTML cache from pre-media deploys)
-            if "/epic-migration/step-${e}.${n}`" in raw and "?v=" not in raw:
-                raw = raw.replace(
-                    "src:`/epic-migration/step-${e}.${n}`",
-                    "src:`/epic-migration/step-${e}.${n}?v=6`",
-                )
-                path.write_text(raw, encoding="utf-8")
-                print(f"  cache-busted media urls in {path.name}")
-            continue
-        print(f"ERROR: {path.name} missing English fallbacks for epic tour — refusing build")
-        raise SystemExit(2)
+        if needle not in raw or "||F[e].title" not in raw:
+            print(f"ERROR: {path.name} missing English fallbacks for epic tour — refusing build")
+            raise SystemExit(2)
+        print(f"ok epic fallbacks: {path.name}")
+        if "src:`/epic-migration/step-${e}.${n}`" in raw:
+            raw = raw.replace(
+                "src:`/epic-migration/step-${e}.${n}`",
+                "src:`/epic-migration/step-${e}.${n}?v=6`",
+            )
+            path.write_text(raw, encoding="utf-8")
+            print(f"  cache-busted media urls in {path.name}")
 
 
 def main() -> int:
