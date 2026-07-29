@@ -44,7 +44,7 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v8
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v8b
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v6
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
 
@@ -77,8 +77,8 @@ jobs:
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v8
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v8 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v8
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v8 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v6
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v8
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v8b
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v8b ttl.sh/cosmicboosts-plane-web:cloud-mirror-v8b
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v8b ttl.sh/cosmicboosts-plane-web:cloud-mirror-v6
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v8b
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v6
