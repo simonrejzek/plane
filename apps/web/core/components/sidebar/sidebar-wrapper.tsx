@@ -81,9 +81,14 @@ export const SidebarWrapper = observer(function SidebarWrapper(props: TSidebarWr
         >
           {children}
         </ScrollArea>
-        {/* Help Section — edition badge only; help lives in top nav when App Rail is on (plane.so shell). */}
+        {/* Help Section */}
         <div className="flex h-12 items-center justify-between border-t border-subtle bg-surface-1 p-3">
           <WorkspaceEditionBadge />
+          {/* TODO: To be checked if we need this */}
+          {/* <div className="flex items-center gap-2">
+          {!shouldRenderAppRail && <HelpMenu />}
+          {!isAppRailEnabled && <AppSidebarToggleButton />}
+        </div> */}
         </div>
       </div>
     </>
