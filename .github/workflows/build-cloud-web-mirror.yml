@@ -44,8 +44,8 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v14
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v13
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v12
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
 
       - name: Verify epic tour fallbacks + media in image context
@@ -82,8 +82,8 @@ jobs:
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v13
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v13 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v13
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v13 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v12
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v14
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v14 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v14
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v14 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v13
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v14
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v13
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v12
