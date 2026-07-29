@@ -645,14 +645,49 @@ def register_commercial_compat(app: FastAPI) -> None:
             total = int(body.get("total_count") or body.get("total_results") or body.get("count") or 0)
         return {"count": total, "total_count": total, "results": []}
 
+    def _normalize_state_lite(r: Dict[str, Any], project_id: Any = None) -> Dict[str, Any]:
+        return {
+            "id": r.get("id"),
+            "name": r.get("name"),
+            "color": r.get("color") or "#60646C",
+            "group": r.get("group") or r.get("group_key") or "backlog",
+            "sequence": r.get("sequence"),
+            "project_id": r.get("project_id") or r.get("project") or project_id,
+            "default": bool(r.get("default")),
+            "description": r.get("description") or "",
+        }
+
+    def _paginate_results(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Commercial SPA: getStatesLite uses data.results; listStatesLite uses W(data)."""
+        n = len(rows)
+        return {
+            "grouped_by": None,
+            "sub_grouped_by": None,
+            "total_count": n,
+            "count": n,
+            "total_results": n,
+            "total_pages": 1,
+            "next_cursor": "1000:1:0",
+            "prev_cursor": "1000:-1:1",
+            "next_page_results": False,
+            "prev_page_results": False,
+            "results": rows,
+            "extra_stats": None,
+        }
+
     @app.get("/api/workspaces/{slug}/states-lite/")
     async def states_lite(slug: str, request: Request):
-        """Commercial SPA loads state labels/colors via states-lite?ids=..."""
+        """Commercial SPA loads state labels/colors via states-lite?ids=...
+
+        getStatesByIds / getWorkspaceStatesLite expect a bare array body.
+        """
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         raw_ids = request.query_params.get("ids") or request.query_params.get("id") or ""
         wanted = {x.strip() for x in raw_ids.split(",") if x.strip()}
+        raw_pids = request.query_params.get("project_ids") or ""
+        wanted_projects = {x.strip() for x in raw_pids.split(",") if x.strip()}
 
         # CE: workspace-level states list (all projects)
         status, body, _ = await ce_get(f"/api/workspaces/{slug}/states/", request)
@@ -680,34 +715,28 @@ def register_commercial_compat(app: FastAPI) -> None:
                 pid = p.get("id")
                 if not pid:
                     continue
+                if wanted_projects and str(pid) not in wanted_projects:
+                    continue
                 st2, body2, _ = await ce_get(
                     f"/api/workspaces/{slug}/projects/{pid}/states/", request
                 )
                 if st2 == 200 and isinstance(body2, list):
                     rows.extend([x for x in body2 if isinstance(x, dict)])
 
+        if wanted_projects and rows:
+            rows = [
+                r
+                for r in rows
+                if str(r.get("project_id") or r.get("project") or "") in wanted_projects
+            ]
         if wanted:
             rows = [r for r in rows if str(r.get("id")) in wanted]
 
-        # Normalize to commercial lite shape
-        out = []
-        for r in rows:
-            out.append(
-                {
-                    "id": r.get("id"),
-                    "name": r.get("name"),
-                    "color": r.get("color") or "#60646C",
-                    "group": r.get("group") or r.get("group_key") or "backlog",
-                    "sequence": r.get("sequence"),
-                    "project_id": r.get("project_id") or r.get("project"),
-                    "default": bool(r.get("default")),
-                    "description": r.get("description") or "",
-                }
-            )
-        return out
+        return [_normalize_state_lite(r) for r in rows]
 
     @app.get("/api/workspaces/{slug}/projects/{project_id}/states-lite/")
     async def project_states_lite(slug: str, project_id: str, request: Request):
+        """SPA getStatesLite expects data.results; listStatesLite expects paginated body."""
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
@@ -721,19 +750,8 @@ def register_commercial_compat(app: FastAPI) -> None:
             rows = [x for x in body if isinstance(x, dict)]
         if wanted:
             rows = [r for r in rows if str(r.get("id")) in wanted]
-        return [
-            {
-                "id": r.get("id"),
-                "name": r.get("name"),
-                "color": r.get("color") or "#60646C",
-                "group": r.get("group") or "backlog",
-                "sequence": r.get("sequence"),
-                "project_id": r.get("project_id") or project_id,
-                "default": bool(r.get("default")),
-                "description": r.get("description") or "",
-            }
-            for r in rows
-        ]
+        out = [_normalize_state_lite(r, project_id) for r in rows]
+        return _paginate_results(out)
 
     @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/")
     async def work_items_alias(slug: str, project_id: str, request: Request):
