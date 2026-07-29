@@ -228,6 +228,13 @@ class SetPromptsBody(BaseModel):
 
 app = FastAPI(title="Plane Intelligence (self-hosted)", version="3.0.0-cosmic")
 
+# Commercial SPA (app.plane.so mirror) needs CE-missing endpoints:
+# permissions, payments/plan/flags, features, roles, enriched workspaces.
+# Registered early; Caddy routes those paths here (not to CE API).
+from commercial_compat import register_commercial_compat  # noqa: E402
+
+register_commercial_compat(app)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS if CORS_ORIGINS != ["*"] else ["*"],

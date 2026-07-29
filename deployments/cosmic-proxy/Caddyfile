@@ -11,8 +11,37 @@
 
 	reverse_proxy /live/* live:3000
 
-	reverse_proxy /api/* api:8000
+	# Plane Intelligence (Pilot AI) — DeepSeek-only self-host PI service
+	# MUST be before generic /api/* so path specificity wins reliably.
+	reverse_proxy /api/v1/* pi:8080
+	reverse_proxy /cosmic-pilot/* pi:8080
+	reverse_proxy /cosmic-pilot-inject.js pi:8080
 
+	# Commercial Business SPA ↔ CE compatibility layer (hosted on PI).
+	# Without these, the mirrored UI shows "Workspace not found" on every page
+	# because CE has no /permissions/, /payments/..., /features/, etc.
+	# Does NOT touch Postgres — read membership from CE, synthesize cloud-shaped JSON.
+	@commercial_compat {
+		path /api/payments/*
+		path /api/users/me/workspaces/
+		path /api/users/me/workspaces
+		path_regexp ws_perms ^/api/workspaces/[^/]+/permissions/?$
+		path_regexp ws_features ^/api/workspaces/[^/]+/features/?$
+		path_regexp ws_roles ^/api/workspaces/[^/]+/roles/?$
+		path_regexp ws_schemes ^/api/workspaces/[^/]+/permission-schemes/?$
+		path_regexp ws_wpf ^/api/workspaces/[^/]+/workspace-project-features/?$
+		path_regexp proj_feat ^/api/workspaces/[^/]+/projects/[^/]+/features/?$
+		path_regexp ws_teamspaces ^/api/workspaces/[^/]+/teamspaces/?$
+		path_regexp ws_customers ^/api/workspaces/[^/]+/customers/?$
+		path_regexp ws_releases ^/api/workspaces/[^/]+/releases(-lite)?/?$
+		path_regexp ws_initiatives ^/api/workspaces/[^/]+/initiatives/?$
+		# Wiki pages live on PI (CE lacks workspace-level pages API)
+		path_regexp ws_wiki_pages ^/api/workspaces/[^/]+/pages
+	}
+	reverse_proxy @commercial_compat pi:8080
+
+	# CE API (projects, issues, modules, labels, worklogs, auth, …)
+	reverse_proxy /api/* api:8000
 	reverse_proxy /auth/* api:8000
 
 	# Official mobile app GraphQL
@@ -23,11 +52,6 @@
 
 	reverse_proxy /{$BUCKET_NAME}/* plane-minio:9000
 	reverse_proxy /{$BUCKET_NAME} plane-minio:9000
-
-	# Plane Intelligence (Pilot AI) — DeepSeek-only self-host PI service
-	reverse_proxy /api/v1/* pi:8080
-	reverse_proxy /cosmic-pilot/* pi:8080
-	reverse_proxy /cosmic-pilot-inject.js pi:8080
 
 	# SPA routes including /m/auth
 	reverse_proxy /* web:3000
