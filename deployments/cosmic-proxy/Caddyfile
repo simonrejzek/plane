@@ -46,6 +46,13 @@
 	@ws_preferences path_regexp ^/api/workspaces/[^/]+/preferences/?$
 	reverse_proxy @ws_preferences pi:8080
 
+	# Commercial board loads state labels via states-lite (CE has /states/)
+	@ws_states_lite path_regexp ^/api/workspaces/[^/]+/states-lite/?$
+	reverse_proxy @ws_states_lite pi:8080
+
+	@proj_states_lite path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/states-lite/?$
+	reverse_proxy @proj_states_lite pi:8080
+
 	@ws_workflows path_regexp ^/api/workspaces/[^/]+/workflows/?$
 	reverse_proxy @ws_workflows pi:8080
 

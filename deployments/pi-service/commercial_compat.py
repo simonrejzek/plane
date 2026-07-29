@@ -634,8 +634,106 @@ def register_commercial_compat(app: FastAPI) -> None:
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        # minimal meta object commercial board tolerates
-        return {"count": 0, "total_count": 0, "results": []}
+        # Prefer real counts from CE issues list so commercial board isn't empty
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/issues/",
+            request,
+            params={"per_page": "1"},
+        )
+        total = 0
+        if status == 200 and isinstance(body, dict):
+            total = int(body.get("total_count") or body.get("total_results") or body.get("count") or 0)
+        return {"count": total, "total_count": total, "results": []}
+
+    @app.get("/api/workspaces/{slug}/states-lite/")
+    async def states_lite(slug: str, request: Request):
+        """Commercial SPA loads state labels/colors via states-lite?ids=..."""
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        raw_ids = request.query_params.get("ids") or request.query_params.get("id") or ""
+        wanted = {x.strip() for x in raw_ids.split(",") if x.strip()}
+
+        # CE: workspace-level states list (all projects)
+        status, body, _ = await ce_get(f"/api/workspaces/{slug}/states/", request)
+        rows: List[Dict[str, Any]] = []
+        if status == 200:
+            if isinstance(body, list):
+                rows = [x for x in body if isinstance(x, dict)]
+            elif isinstance(body, dict):
+                maybe = body.get("results") or body.get("data") or []
+                if isinstance(maybe, list):
+                    rows = [x for x in maybe if isinstance(x, dict)]
+
+        # Fallback: aggregate per-project states if workspace endpoint is sparse
+        if not rows:
+            st, projects, _ = await ce_get(f"/api/workspaces/{slug}/projects/", request)
+            proj_list: List[Dict[str, Any]] = []
+            if st == 200:
+                if isinstance(projects, list):
+                    proj_list = [p for p in projects if isinstance(p, dict)]
+                elif isinstance(projects, dict):
+                    pr = projects.get("results") or []
+                    if isinstance(pr, list):
+                        proj_list = [p for p in pr if isinstance(p, dict)]
+            for p in proj_list[:30]:
+                pid = p.get("id")
+                if not pid:
+                    continue
+                st2, body2, _ = await ce_get(
+                    f"/api/workspaces/{slug}/projects/{pid}/states/", request
+                )
+                if st2 == 200 and isinstance(body2, list):
+                    rows.extend([x for x in body2 if isinstance(x, dict)])
+
+        if wanted:
+            rows = [r for r in rows if str(r.get("id")) in wanted]
+
+        # Normalize to commercial lite shape
+        out = []
+        for r in rows:
+            out.append(
+                {
+                    "id": r.get("id"),
+                    "name": r.get("name"),
+                    "color": r.get("color") or "#60646C",
+                    "group": r.get("group") or r.get("group_key") or "backlog",
+                    "sequence": r.get("sequence"),
+                    "project_id": r.get("project_id") or r.get("project"),
+                    "default": bool(r.get("default")),
+                    "description": r.get("description") or "",
+                }
+            )
+        return out
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/states-lite/")
+    async def project_states_lite(slug: str, project_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        raw_ids = request.query_params.get("ids") or ""
+        wanted = {x.strip() for x in raw_ids.split(",") if x.strip()}
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/states/", request
+        )
+        rows: List[Dict[str, Any]] = []
+        if status == 200 and isinstance(body, list):
+            rows = [x for x in body if isinstance(x, dict)]
+        if wanted:
+            rows = [r for r in rows if str(r.get("id")) in wanted]
+        return [
+            {
+                "id": r.get("id"),
+                "name": r.get("name"),
+                "color": r.get("color") or "#60646C",
+                "group": r.get("group") or "backlog",
+                "sequence": r.get("sequence"),
+                "project_id": r.get("project_id") or project_id,
+                "default": bool(r.get("default")),
+                "description": r.get("description") or "",
+            }
+            for r in rows
+        ]
 
     @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/")
     async def work_items_alias(slug: str, project_id: str, request: Request):
