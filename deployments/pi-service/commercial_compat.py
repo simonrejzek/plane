@@ -508,16 +508,258 @@ def register_commercial_compat(app: FastAPI) -> None:
             }
         return {"total_count": 0, "grouped_count": {}, "counts": {}}
 
+    def _module_rows_from_body(body: Any) -> List[Dict[str, Any]]:
+        if isinstance(body, list):
+            return [x for x in body if isinstance(x, dict)]
+        if isinstance(body, dict):
+            maybe = body.get("results") or body.get("data") or []
+            if isinstance(maybe, list):
+                return [x for x in maybe if isinstance(x, dict)]
+        return []
+
+    async def _collect_workspace_modules(slug: str, request: Request) -> List[Dict[str, Any]]:
+        """Aggregate modules so board can resolve module_ids → names."""
+        rows: List[Dict[str, Any]] = []
+        seen: set = set()
+
+        status, body, _ = await ce_get(f"/api/workspaces/{slug}/modules/", request)
+        if status == 200:
+            for r in _module_rows_from_body(body):
+                rid = str(r.get("id") or "")
+                if rid and rid not in seen:
+                    seen.add(rid)
+                    rows.append(r)
+
+        # Always also pull per-project modules (CE workspace /modules/ can be sparse)
+        _, projects, _ = await fetch_ce_projects(slug, request)
+        for p in projects[:40]:
+            pid = p.get("id")
+            if not pid:
+                continue
+            st, body2, _ = await ce_get(
+                f"/api/workspaces/{slug}/projects/{pid}/modules/", request
+            )
+            if st != 200:
+                continue
+            for r in _module_rows_from_body(body2):
+                rid = str(r.get("id") or "")
+                if rid and rid not in seen:
+                    seen.add(rid)
+                    rows.append(r)
+        return rows
+
     @app.get("/api/workspaces/{slug}/modules-lite/")
     async def workspace_modules_lite(slug: str, request: Request):
+        """Commercial SPA:
+        - getModulesByIds → bare array filtered by ?ids=
+        - listWorkspaceLite → paginated {results:...}
+        """
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        # CE has workspaces/.../modules sometimes; fall back empty
-        status, body, _ = await ce_get(f"/api/workspaces/{slug}/modules/", request)
-        if status == 200 and isinstance(body, list):
-            return body
-        return []
+
+        raw_ids = request.query_params.get("ids") or ""
+        wanted = {x.strip() for x in raw_ids.split(",") if x.strip()}
+        raw_pids = request.query_params.get("project_ids") or ""
+        wanted_projects = {x.strip() for x in raw_pids.split(",") if x.strip()}
+
+        rows = await _collect_workspace_modules(slug, request)
+        if wanted_projects:
+            rows = [
+                r
+                for r in rows
+                if str(r.get("project_id") or r.get("project") or "") in wanted_projects
+            ]
+        if wanted:
+            rows = [r for r in rows if str(r.get("id")) in wanted]
+            # batch-id loader expects a bare list
+            return rows
+
+        # list loader expects paginated commercial shape
+        return as_page(rows)
+
+    def _member_lite_from_user(
+        user: Dict[str, Any],
+        *,
+        workspace_id: Any = None,
+        role: Any = None,
+        membership_id: Any = None,
+        is_active: Any = True,
+    ) -> Dict[str, Any]:
+        uid = user.get("id")
+        display = (
+            user.get("display_name")
+            or " ".join(
+                x
+                for x in [user.get("first_name") or "", user.get("last_name") or ""]
+                if x
+            ).strip()
+            or user.get("email")
+            or str(uid or "")
+        )
+        return {
+            "id": uid,
+            "display_name": display,
+            "first_name": user.get("first_name") or "",
+            "last_name": user.get("last_name") or "",
+            "avatar": user.get("avatar") or "",
+            "avatar_url": user.get("avatar_url"),
+            "is_bot": bool(user.get("is_bot")),
+            "email": user.get("email") or "",
+            "last_login_medium": user.get("last_login_medium") or "email",
+            "workspace_id": workspace_id,
+            "role": role,
+            "role_slug": "admin" if (isinstance(role, int) and role >= 20) else "member",
+            "is_active": True if is_active is None else bool(is_active),
+            "membership_id": membership_id,
+        }
+
+    async def _workspace_user_map(slug: str, request: Request) -> Dict[str, Dict[str, Any]]:
+        """Map user_id → CE user profile from workspace members."""
+        out: Dict[str, Dict[str, Any]] = {}
+        status, body, _ = await ce_get(f"/api/workspaces/{slug}/members/", request)
+        if status != 200:
+            return out
+        rows = body if isinstance(body, list) else (body.get("results") if isinstance(body, dict) else [])
+        if not isinstance(rows, list):
+            return out
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            member = row.get("member")
+            if isinstance(member, dict) and member.get("id"):
+                out[str(member["id"])] = member
+            elif isinstance(member, str):
+                out.setdefault(member, {"id": member})
+        # ensure current user is present (fresh first/last name)
+        st, me, _ = await ce_get("/api/users/me/", request)
+        if st == 200 and isinstance(me, dict) and me.get("id"):
+            out[str(me["id"])] = {**out.get(str(me["id"]), {}), **me}
+        return out
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/members-lite/")
+    async def project_members_lite(slug: str, project_id: str, request: Request):
+        """SPA assignee avatars/names load via members-lite (CE only has /members/)."""
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+
+        users = await _workspace_user_map(slug, request)
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/members/", request
+        )
+        rows_in: List[Dict[str, Any]] = []
+        if status == 200:
+            if isinstance(body, list):
+                rows_in = [x for x in body if isinstance(x, dict)]
+            elif isinstance(body, dict):
+                maybe = body.get("results") or []
+                if isinstance(maybe, list):
+                    rows_in = [x for x in maybe if isinstance(x, dict)]
+
+        # workspace id for lite shape
+        ws_id = None
+        st_ws, ws_body, _ = await ce_get(f"/api/workspaces/{slug}/", request)
+        if st_ws == 200 and isinstance(ws_body, dict):
+            ws_id = ws_body.get("id")
+
+        lite: List[Dict[str, Any]] = []
+        for row in rows_in:
+            mid = row.get("member")
+            user_id = None
+            user_obj: Dict[str, Any] = {}
+            if isinstance(mid, dict):
+                user_id = str(mid.get("id") or "")
+                user_obj = mid
+            elif mid is not None:
+                user_id = str(mid)
+            if not user_id:
+                continue
+            profile = {**users.get(user_id, {}), **user_obj, "id": user_id}
+            lite.append(
+                _member_lite_from_user(
+                    profile,
+                    workspace_id=ws_id,
+                    role=row.get("role"),
+                    membership_id=row.get("id"),
+                    is_active=row.get("is_active", True),
+                )
+            )
+
+        # search filter (optional)
+        search = (request.query_params.get("search") or "").strip().lower()
+        if search:
+            lite = [
+                m
+                for m in lite
+                if search in (m.get("display_name") or "").lower()
+                or search in (m.get("email") or "").lower()
+            ]
+        return as_page(lite)
+
+    @app.get("/api/workspaces/{slug}/members-lite/")
+    async def workspace_members_lite(slug: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        status, body, _ = await ce_get(f"/api/workspaces/{slug}/members/", request)
+        if status != 200:
+            return as_page([])
+        rows = body if isinstance(body, list) else (body.get("results") if isinstance(body, dict) else [])
+        if not isinstance(rows, list):
+            rows = []
+        ws_id = None
+        st_ws, ws_body, _ = await ce_get(f"/api/workspaces/{slug}/", request)
+        if st_ws == 200 and isinstance(ws_body, dict):
+            ws_id = ws_body.get("id")
+        lite: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            member = row.get("member")
+            if not isinstance(member, dict):
+                continue
+            lite.append(
+                _member_lite_from_user(
+                    member,
+                    workspace_id=ws_id,
+                    role=row.get("role"),
+                    membership_id=row.get("id"),
+                    is_active=row.get("is_active", True),
+                )
+            )
+        raw_ids = request.query_params.get("ids") or ""
+        wanted = {x.strip() for x in raw_ids.split(",") if x.strip()}
+        if wanted:
+            return [m for m in lite if str(m.get("id")) in wanted]
+        return as_page(lite)
+
+    @app.get("/api/instances/")
+    async def instances_version_spoof(request: Request):
+        """Advertise Plane 3.0 / Business so mobile + commercial SPA unlock AI features."""
+        status, body, _ = await ce_get("/api/instances/", request)
+        if status != 200 or not isinstance(body, dict):
+            return JSONResponse(
+                body if isinstance(body, dict) else {"error": "instances unavailable"},
+                status_code=status if status else 502,
+            )
+        out = dict(body)
+        inst = dict(out.get("instance") or {})
+        # Mobile / cloud apps gate on current_version (target: 3.0.0 family)
+        spoof = os.environ.get("PLANE_SPOOF_VERSION") or "3.0.0"
+        inst["current_version"] = spoof
+        inst["latest_version"] = spoof
+        inst["edition"] = inst.get("edition") or "PLANE_BUSINESS"
+        inst["is_current_version_deprecated"] = False
+        out["instance"] = inst
+        cfg = dict(out.get("config") or {})
+        cfg.setdefault("has_llm_configured", True)
+        cfg.setdefault("is_email_password_enabled", True)
+        # Keep magic off unless SMTP works — avoid empty "continue" into magic code
+        cfg.setdefault("is_magic_login_enabled", False)
+        cfg.setdefault("enable_turnstile", False)
+        out["config"] = cfg
+        return out
 
     @app.get("/api/workspaces/{slug}/cycles-lite/")
     async def cycles_lite(slug: str, request: Request):

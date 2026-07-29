@@ -68,6 +68,16 @@
 	@ws_modules_lite path_regexp ^/api/workspaces/[^/]+/(modules-lite|cycles-lite)/?$
 	reverse_proxy @ws_modules_lite pi:8080
 
+	# Commercial SPA assignee avatars/names (CE has /members/ only)
+	@ws_members_lite path_regexp ^/api/workspaces/[^/]+/members-lite/?$
+	reverse_proxy @ws_members_lite pi:8080
+
+	@proj_members_lite path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/members-lite/?$
+	reverse_proxy @proj_members_lite pi:8080
+
+	# Version spoof for mobile app + commercial 3.0 feature gates
+	@instances_spoof path /api/instances/ /api/instances
+	reverse_proxy @instances_spoof pi:8080
 
 	# GET-only wrappers (POST/PATCH/DELETE for modules must stay on CE API)
 	@proj_modules {
