@@ -15,6 +15,7 @@ from .queries.project import ProjectQuery, ProjectMembersQuery
 from .queries.label import LabelQuery, WorkspaceLabelQuery
 from .queries.state import StateQuery, WorkspaceStateQuery
 from .queries.notification import NotificationQuery
+from .queries.mobile_home import MobileHomeQuery
 from .queries.issue import (
     IssuesInformationQuery,
     IssueQuery,
@@ -157,6 +158,7 @@ class Query(
     WorkspaceLicenseQuery,
     TimezoneListQuery,
     StickyQuery,
+    MobileHomeQuery,
     WorkItemCommentReactionQuery,
     MobileNestedPagesQuery,
     InitiativesCountQuery,

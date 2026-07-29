@@ -50,3 +50,15 @@ class FeatureFlagType:
     epics: bool = False
     nested_pages: bool = False
     teamspaces: bool = False
+
+    # ====== commercial mobile FeatureFlagQuery fields (schema-compat stubs) ======
+    advanced_search: bool = False
+    editor_mathematics: bool = False
+    editor_external_embeds: bool = False
+    page_comments: bool = False
+    shared_pages: bool = False
+    editor_attachments: bool = False
+    editor_advanced_mentions: bool = False
+    editor_video_attachments: bool = False
+    link_pages: bool = False
+

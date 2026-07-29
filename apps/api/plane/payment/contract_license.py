@@ -59,6 +59,15 @@ def get_contract_feature_flags() -> dict:
         "EPICS": False,
         "NESTED_PAGES": False,
         "TEAMSPACES": False,
+        "ADVANCED_SEARCH": False,
+        "EDITOR_MATHEMATICS": False,
+        "EDITOR_EXTERNAL_EMBEDS": False,
+        "PAGE_COMMENTS": False,
+        "SHARED_PAGES": False,
+        "EDITOR_ATTACHMENTS": False,
+        "EDITOR_ADVANCED_MENTIONS": False,
+        "EDITOR_VIDEO_ATTACHMENTS": False,
+        "LINK_PAGES": False,
     }
     # Shape expected by GraphQL: iterable of one map (`.values()` used on dict of maps)
     return {"default": flags}

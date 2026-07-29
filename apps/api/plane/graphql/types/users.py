@@ -263,6 +263,22 @@ class UserRecentVisitType:
     def user(self) -> int:
         return self.user_id
 
+    @strawberry.field(name="projectDetails")
+    async def project_details(self) -> Optional[FavoriteProjectDetails]:
+        if not getattr(self, "project_id", None):
+            return None
+        project = await sync_to_async(
+            Project.objects.filter(pk=self.project_id).first
+        )()
+        if not project:
+            return None
+        return FavoriteProjectDetails(
+            id=project.id,
+            name=project.name,
+            identifier=project.identifier,
+            logoProps=project.logo_props or {},
+        )
+
     @strawberry.field
     async def entity_data(self) -> Optional[UserFavoriteEntityData]:
         # where entity_identifier is project_id and entity_name is project
@@ -304,11 +320,21 @@ class UserRecentVisitType:
         # where entity_identifier is issue id and entity_name is issue
         elif self.entity_identifier and self.entity_name == "issue":
             issue = await sync_to_async(
-                Issue.objects.filter(id=self.entity_identifier).first
+                Issue.objects.filter(id=self.entity_identifier)
+                .select_related("project")
+                .first
             )()
             if issue:
+                ident = None
+                try:
+                    ident = f"{issue.project.identifier}-{issue.sequence_id}"
+                except Exception:
+                    ident = None
                 return UserFavoriteEntityData(
-                    id=issue.id, name=issue.name, logo_props=None
+                    id=issue.id,
+                    name=issue.name,
+                    logo_props=None,
+                    workitemIdentifier=ident,
                 )
             return None
         # where entity_identifier is issue_view id and entity_name is issue_view

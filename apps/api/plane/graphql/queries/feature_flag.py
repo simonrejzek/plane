@@ -122,4 +122,14 @@ class FeatureFlagQuery:
             epics=feature_flags.get("EPICS", False),
             nested_pages=feature_flags.get("NESTED_PAGES", False),
             teamspaces=feature_flags.get("TEAMSPACES", False),
+            # commercial mobile flags
+            advanced_search=feature_flags.get("ADVANCED_SEARCH", False),
+            editor_mathematics=feature_flags.get("EDITOR_MATHEMATICS", False),
+            editor_external_embeds=feature_flags.get("EDITOR_EXTERNAL_EMBEDS", False),
+            page_comments=feature_flags.get("PAGE_COMMENTS", False),
+            shared_pages=feature_flags.get("SHARED_PAGES", False),
+            editor_attachments=feature_flags.get("EDITOR_ATTACHMENTS", False),
+            editor_advanced_mentions=feature_flags.get("EDITOR_ADVANCED_MENTIONS", False),
+            editor_video_attachments=feature_flags.get("EDITOR_VIDEO_ATTACHMENTS", False),
+            link_pages=feature_flags.get("LINK_PAGES", False),
         )

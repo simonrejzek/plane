@@ -831,8 +831,8 @@ def register_commercial_compat(app: FastAPI) -> None:
         out = dict(body)
         inst = dict(out.get("instance") or {})
         # Valid semver required (string "latest" breaks some app parsers → Loading failed).
-        # 2.3.1 matches App Store client; AI/Pilot is unlocked via feature flags + has_llm_configured.
-        spoof = (os.environ.get("PLANE_SPOOF_VERSION") or "2.3.1").strip() or "2.3.1"
+        # 3.0.0 requested for commercial mobile client; AI/Pilot is unlocked via feature flags + has_llm_configured.
+        spoof = (os.environ.get("PLANE_SPOOF_VERSION") or "3.0.0").strip() or "3.0.0"
         inst["current_version"] = spoof
         inst["latest_version"] = spoof
         inst["edition"] = inst.get("edition") or "PLANE_BUSINESS"
