@@ -821,7 +821,7 @@ def register_commercial_compat(app: FastAPI) -> None:
 
     @app.get("/api/instances/")
     async def instances_version_spoof(request: Request):
-        """Advertise Plane 3.0 / Business so mobile + commercial SPA unlock AI features."""
+        """Spoof instance version/edition so mobile unlocks Pilot AI (cloud uses \"latest\")."""
         status, body, _ = await ce_get("/api/instances/", request)
         if status != 200 or not isinstance(body, dict):
             return JSONResponse(
@@ -830,8 +830,8 @@ def register_commercial_compat(app: FastAPI) -> None:
             )
         out = dict(body)
         inst = dict(out.get("instance") or {})
-        # Mobile app gate: advertise CE commercial version for mobile (1.12.0+ per Plane docs; App Store app is 2.3.1)
-        spoof = os.environ.get("PLANE_SPOOF_VERSION") or "2.3.1"
+        # api.plane.so returns current_version="latest" — mobile Pilot/AI gates key off that.
+        spoof = (os.environ.get("PLANE_SPOOF_VERSION") or "latest").strip() or "latest"
         inst["current_version"] = spoof
         inst["latest_version"] = spoof
         inst["edition"] = inst.get("edition") or "PLANE_BUSINESS"
@@ -843,6 +843,7 @@ def register_commercial_compat(app: FastAPI) -> None:
         # Keep magic off unless SMTP works — avoid empty "continue" into magic code
         cfg.setdefault("is_magic_login_enabled", False)
         cfg.setdefault("enable_turnstile", False)
+        cfg["is_self_managed"] = True
         cfg["app_base_url"] = cfg.get("app_base_url") or f"https://{os.environ.get('APP_DOMAIN', 'plane.cosmicboosts.store')}"
         cfg["space_base_url"] = cfg.get("space_base_url") or cfg["app_base_url"]
         out["config"] = cfg
