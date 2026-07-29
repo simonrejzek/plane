@@ -44,3 +44,21 @@ jobs:
             VITE_WEB_BASE_URL=
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Host pull must work without auth for Dokploy
+      - name: Make GHCR package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          OWNER="${{ github.repository_owner }}"
+          PKG="plane-web"
+          # user-owned package
+          curl -fsS -X PATCH \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/user/packages/container/${PKG}" \
+            -d '{"visibility":"public"}' \
+            && echo "package set public" \
+            || echo "visibility patch failed (may already be public or need UI)"
