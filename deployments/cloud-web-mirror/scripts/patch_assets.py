@@ -60,6 +60,33 @@ def patch_text(text: str) -> tuple[str, int]:
     return text, n
 
 
+
+
+def ensure_epic_migration_fallbacks() -> None:
+    """Commercial SPA expects product_tour.epic_migration.* — self-host may miss that ns.
+    Keep English copy fallbacks so users never see raw i18n key strings."""
+    targets = list(ROOT.glob("epic-migration-*.js"))
+    if not targets:
+        print("warn: no epic-migration-*.js found")
+        return
+    needle = "Epics is now a work item type"
+    for path in targets:
+        raw = path.read_text(encoding="utf-8")
+        if needle in raw and "||F[e].title" in raw:
+            print(f"ok epic fallbacks: {path.name}")
+            # cache-bust tour media (stale SPA HTML cache from pre-media deploys)
+            if "/epic-migration/step-${e}.${n}`" in raw and "?v=" not in raw:
+                raw = raw.replace(
+                    "src:`/epic-migration/step-${e}.${n}`",
+                    "src:`/epic-migration/step-${e}.${n}?v=6`",
+                )
+                path.write_text(raw, encoding="utf-8")
+                print(f"  cache-busted media urls in {path.name}")
+            continue
+        print(f"ERROR: {path.name} missing English fallbacks for epic tour — refusing build")
+        raise SystemExit(2)
+
+
 def main() -> int:
     if not ROOT.is_dir():
         print(f"missing assets dir: {ROOT}", file=sys.stderr)
@@ -82,6 +109,7 @@ def main() -> int:
             changes += n
             print(f"patched {path.name}: {n}")
     print(f"done: {files} files, {changes} replacements")
+    ensure_epic_migration_fallbacks()
     return 0
 
 

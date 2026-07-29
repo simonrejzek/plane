@@ -44,13 +44,27 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v6
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v5
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
+
+      - name: Verify epic tour fallbacks + media in image context
+        working-directory: deployments/cloud-web-mirror
+        run: |
+          set -e
+          grep -q "Epics is now a work item type" public/assets/epic-migration-*.js
+          grep -q "||F\\[e\\].title" public/assets/epic-migration-*.js
+          test -f public/epic-migration/step-1.gif
+          test -f public/epic-migration/step-2.webp
+          test -f public/epic-migration/step-3.webp
+          test -s public/epic-migration/step-1.gif
 
       - name: Mirror to ttl.sh
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v5
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v5 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v5
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v6
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v6 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v6
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v6 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v5
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v6
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v5
