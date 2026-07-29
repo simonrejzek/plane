@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PLANE_API_BASE = (os.environ.get("PLANE_API_BASE") or "http://api:8000").rstrip("/")
@@ -75,11 +75,25 @@ SELFHOST_PLAN = _load(
     },
 )
 # Always force cloud AI surface flags regardless of on-disk plan snapshot.
+# Kill trial banner ("Business trial ends in N days") and payment nags.
 SELFHOST_PLAN = dict(SELFHOST_PLAN)
 SELFHOST_PLAN["is_self_managed"] = False
 SELFHOST_PLAN["product"] = SELFHOST_PLAN.get("product") or "BUSINESS"
 SELFHOST_PLAN["show_payment_button"] = False
+SELFHOST_PLAN["show_trial_banner"] = False
+SELFHOST_PLAN["is_on_trial"] = False
+SELFHOST_PLAN["is_trial_allowed"] = False
+SELFHOST_PLAN["is_trial_ended"] = False
+SELFHOST_PLAN["remaining_trial_days"] = 0
+SELFHOST_PLAN["trial_end_date"] = None
+SELFHOST_PLAN["has_activated_free_trial"] = False
+SELFHOST_PLAN["has_upgraded"] = True
+SELFHOST_PLAN["has_added_payment_method"] = True
 SELFHOST_PLAN["is_free_member_count_exceeded"] = False
+SELFHOST_PLAN["purchased_seats"] = max(int(SELFHOST_PLAN.get("purchased_seats") or 0), 9999)
+SELFHOST_PLAN["free_seats"] = max(int(SELFHOST_PLAN.get("free_seats") or 0), 9999)
+SELFHOST_PLAN["show_seats_banner"] = False
+SELFHOST_PLAN["show_verification_failed_banner"] = False
 
 
 def _forward_headers(request: Request) -> Dict[str, str]:
@@ -131,6 +145,58 @@ async def ce_post(
         body = r.text
     return r.status_code, body, dict(r.headers)
 
+
+
+
+async def ce_patch(path: str, request: Request, json_body: Any = None) -> Tuple[int, Any, Dict[str, str]]:
+    url = f"{PLANE_API_BASE}{path}"
+    headers = _forward_headers(request)
+    headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+    headers["Content-Type"] = "application/json"
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        r = await client.patch(url, headers=headers, json=json_body if json_body is not None else {})
+    try:
+        body = r.json()
+    except Exception:
+        body = r.text
+    return r.status_code, body, dict(r.headers)
+
+
+async def ce_delete(path: str, request: Request) -> Tuple[int, Any, Dict[str, str]]:
+    url = f"{PLANE_API_BASE}{path}"
+    headers = _forward_headers(request)
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        r = await client.delete(url, headers=headers)
+    try:
+        body = r.json() if r.content else {}
+    except Exception:
+        body = r.text
+    return r.status_code, body, dict(r.headers)
+
+
+async def ce_request(method: str, path: str, request: Request, json_body: Any = None) -> Tuple[int, Any, Dict[str, str]]:
+    m = (method or "GET").upper()
+    if m == "GET":
+        return await ce_get(path, request)
+    if m == "POST":
+        return await ce_post(path, request, json_body=json_body)
+    if m == "PATCH":
+        return await ce_patch(path, request, json_body=json_body)
+    if m == "PUT":
+        url = f"{PLANE_API_BASE}{path}"
+        headers = _forward_headers(request)
+        headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+        headers["Content-Type"] = "application/json"
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            r = await client.put(url, headers=headers, json=json_body if json_body is not None else {})
+        try:
+            body = r.json()
+        except Exception:
+            body = r.text
+        return r.status_code, body, dict(r.headers)
+    if m == "DELETE":
+        return await ce_delete(path, request)
+    return 405, {"error": "method not allowed"}, {}
 
 def relation_for_ce_role(role: Optional[int]) -> str:
     if role is None:
@@ -952,12 +1018,50 @@ def register_commercial_compat(app: FastAPI) -> None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         return []
 
+    def _default_preferences() -> Dict[str, Any]:
+        """Mark onboarding/product tours as already dismissed so SPA stops re-showing them."""
+        return {
+            # Common commercial tour / onboarding keys (SPA ignores unknown keys safely)
+            "is_onboarded": True,
+            "is_workspace_onboarded": True,
+            "has_dismissed_product_tour": True,
+            "has_dismissed_sidebar_tour": True,
+            "has_dismissed_ai_tour": True,
+            "has_dismissed_wiki_tour": True,
+            "has_dismissed_project_tour": True,
+            "has_dismissed_work_item_tour": True,
+            "dismissed_tours": [
+                "product",
+                "sidebar",
+                "ai",
+                "wiki",
+                "project",
+                "work_item",
+                "home",
+                "app_rail",
+                "my_work",
+            ],
+            "product_tours": {
+                "dismissed": True,
+                "completed": True,
+                "skipped": True,
+            },
+            "tours": {
+                "product": {"dismissed": True, "completed": True},
+                "sidebar": {"dismissed": True, "completed": True},
+                "ai": {"dismissed": True, "completed": True},
+                "wiki": {"dismissed": True, "completed": True},
+            },
+        }
+
     @app.get("/api/workspaces/{slug}/preferences/")
     async def workspace_preferences_get(slug: str, request: Request):
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        return PREF_STORE.get(slug, {})
+        cur = dict(_default_preferences())
+        cur.update(PREF_STORE.get(slug, {}) or {})
+        return cur
 
     @app.api_route("/api/workspaces/{slug}/preferences/", methods=["PATCH", "PUT", "POST"])
     async def workspace_preferences_write(slug: str, request: Request):
@@ -968,9 +1072,17 @@ def register_commercial_compat(app: FastAPI) -> None:
             patch = await request.json()
         except Exception:
             patch = {}
-        cur = dict(PREF_STORE.get(slug, {}))
+        cur = dict(_default_preferences())
+        cur.update(PREF_STORE.get(slug, {}) or {})
         if isinstance(patch, dict):
-            cur.update(patch)
+            # Deep-merge nested tour maps so a partial patch can't re-open tours.
+            for k, v in patch.items():
+                if isinstance(v, dict) and isinstance(cur.get(k), dict):
+                    nested = dict(cur[k])
+                    nested.update(v)
+                    cur[k] = nested
+                else:
+                    cur[k] = v
         PREF_STORE[slug] = cur
         return cur
 
@@ -1187,6 +1299,60 @@ def register_commercial_compat(app: FastAPI) -> None:
         out = [_normalize_state_lite(r, project_id) for r in rows]
         return _paginate_results(out)
 
+    async def _module_name_map(slug: str, project_id: str, request: Request) -> Dict[str, str]:
+        """id → name for project modules (cached per request via local dict)."""
+        out: Dict[str, str] = {}
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/modules/", request
+        )
+        rows: List[Dict[str, Any]] = []
+        if status == 200:
+            if isinstance(body, list):
+                rows = [x for x in body if isinstance(x, dict)]
+            elif isinstance(body, dict):
+                maybe = body.get("results") or []
+                if isinstance(maybe, list):
+                    rows = [x for x in maybe if isinstance(x, dict)]
+        for r in rows:
+            mid = r.get("id")
+            if mid:
+                out[str(mid)] = r.get("name") or r.get("title") or str(mid)
+        return out
+
+    def _enrich_issue_modules(issue: Dict[str, Any], mod_map: Dict[str, str]) -> Dict[str, Any]:
+        """Ensure module fields show names, not bare UUIDs."""
+        if not isinstance(issue, dict):
+            return issue
+        # module_ids: list of uuid strings
+        mids = issue.get("module_ids") or issue.get("module_id")
+        if isinstance(mids, str):
+            mids = [mids]
+        if isinstance(mids, list) and mids:
+            issue["module_ids"] = [str(x) for x in mids if x]
+            modules = []
+            for mid in issue["module_ids"]:
+                modules.append({"id": mid, "name": mod_map.get(str(mid)) or mid})
+            issue["modules"] = modules
+            # some SPA paths read singular module
+            if len(modules) == 1:
+                issue["module"] = modules[0]
+                issue["module_detail"] = modules[0]
+        # modules already present but missing names
+        mods_list = issue.get("modules")
+        if isinstance(mods_list, list):
+            enriched = []
+            for m in mods_list:
+                if isinstance(m, dict):
+                    mid = str(m.get("id") or "")
+                    name = m.get("name") or mod_map.get(mid) or mid
+                    enriched.append({**m, "id": mid or m.get("id"), "name": name})
+                elif isinstance(m, str):
+                    enriched.append({"id": m, "name": mod_map.get(m) or m})
+                else:
+                    enriched.append(m)
+            issue["modules"] = enriched
+        return issue
+
     @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/")
     async def work_items_alias(slug: str, project_id: str, request: Request):
         """Alias commercial work-items list to CE issues, preserving query string."""
@@ -1200,7 +1366,431 @@ def register_commercial_compat(app: FastAPI) -> None:
         status, body, _ = await ce_get(path, request)
         if status != 200:
             return JSONResponse(body if isinstance(body, (dict, list)) else {"error": str(body)}, status_code=status)
+        # Enrich module names so board/list doesn't flash UUIDs
+        try:
+            mod_map = await _module_name_map(slug, project_id, request)
+            if mod_map and isinstance(body, dict):
+                results = body.get("results")
+                if isinstance(results, list):
+                    body["results"] = [
+                        _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x for x in results
+                    ]
+                elif isinstance(results, dict):
+                    for k, bucket in list(results.items()):
+                        if isinstance(bucket, dict) and isinstance(bucket.get("results"), list):
+                            bucket["results"] = [
+                                _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x
+                                for x in bucket["results"]
+                            ]
+                        elif isinstance(bucket, list):
+                            results[k] = [
+                                _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x for x in bucket
+                            ]
+        except Exception:
+            pass
         return body
+
+
+    # ---- Commercial SPA work-item path aliases → CE issues API ----
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/",
+        methods=["GET", "PATCH", "DELETE"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}",
+        methods=["GET", "PATCH", "DELETE"],
+    )
+    async def work_item_detail(slug: str, project_id: str, issue_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        path = f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/"
+        if request.method == "GET":
+            status, body, _ = await ce_get(path, request)
+        elif request.method == "PATCH":
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = {}
+            # Map commercial field aliases → CE issue fields for assign/unassign
+            if isinstance(payload, dict):
+                if "assignees" in payload and "assignees_list" not in payload:
+                    payload["assignees_list"] = payload.get("assignees")
+                if "assignee_ids" in payload and "assignees_list" not in payload:
+                    payload["assignees_list"] = payload.get("assignee_ids")
+            status, body, _ = await ce_patch(path, request, json_body=payload)
+        else:
+            status, body, _ = await ce_delete(path, request)
+        if status >= 400:
+            return JSONResponse(body if isinstance(body, (dict, list)) else {"error": str(body)}, status_code=status)
+        # Enrich module field with name when only id present
+        if isinstance(body, dict) and request.method in ("GET", "PATCH"):
+            mod_map = await _module_name_map(slug, project_id, request)
+            body = _enrich_issue_modules(body, mod_map)
+            # Also pull issue-module relation if CE stores modules separately
+            if not body.get("modules") and not body.get("module_ids"):
+                st3, rel, _ = await ce_get(
+                    f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/modules/",
+                    request,
+                )
+                if st3 == 200:
+                    rows = rel if isinstance(rel, list) else (rel.get("results") if isinstance(rel, dict) else [])
+                    if isinstance(rows, list) and rows:
+                        mods = []
+                        for r in rows:
+                            if isinstance(r, dict):
+                                mid = str(r.get("id") or r.get("module") or r.get("module_id") or "")
+                                name = r.get("name") or mod_map.get(mid) or mid
+                                if mid:
+                                    mods.append({"id": mid, "name": name})
+                        if mods:
+                            body["modules"] = mods
+                            body["module_ids"] = [m["id"] for m in mods]
+                            if len(mods) == 1:
+                                body["module"] = mods[0]
+        return body
+
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/subscribers/",
+        methods=["GET", "POST"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/subscribers",
+        methods=["GET", "POST"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/subscribers/",
+        methods=["GET", "POST"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/subscribers",
+        methods=["GET", "POST"],
+    )
+    async def issue_subscribers_alias(slug: str, project_id: str, issue_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        if request.method == "GET":
+            status, body, _ = await ce_get(
+                f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/issue-subscribers/",
+                request,
+            )
+            if status == 404:
+                return []
+            return body if status < 400 else JSONResponse(body if isinstance(body, dict) else {"error": str(body)}, status_code=status)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        status, body, _ = await ce_post(
+            f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/issue-subscribers/",
+            request,
+            json_body=payload,
+        )
+        return JSONResponse(body if isinstance(body, (dict, list)) else {"ok": True}, status_code=status if status else 200)
+
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/subscribers/me/",
+        methods=["GET", "POST", "DELETE"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/subscribers/me",
+        methods=["GET", "POST", "DELETE"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/subscribers/me/",
+        methods=["GET", "POST", "DELETE"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/subscribers/me",
+        methods=["GET", "POST", "DELETE"],
+    )
+    async def issue_subscribe_me(slug: str, project_id: str, issue_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        path = f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/subscribe/"
+        if request.method == "GET":
+            status, body, _ = await ce_get(path, request)
+        elif request.method == "POST":
+            status, body, _ = await ce_post(path, request, json_body={})
+        else:
+            status, body, _ = await ce_delete(path, request)
+        if status >= 400:
+            # soft-success so SPA subscribe button does not hard-error
+            return {"subscribed": request.method != "DELETE", "is_subscribed": request.method != "DELETE"}
+        return body if body not in (None, "") else {"subscribed": request.method != "DELETE", "is_subscribed": request.method != "DELETE"}
+
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/votes/",
+        methods=["GET", "POST", "DELETE"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/votes",
+        methods=["GET", "POST", "DELETE"],
+    )
+    async def work_item_votes(slug: str, project_id: str, issue_id: str, request: Request):
+        """CE has issue reactions, not votes — map best-effort and never 404."""
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        # Prefer CE reactions if present
+        if request.method == "GET":
+            status, body, _ = await ce_get(
+                f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/reactions/",
+                request,
+            )
+            if status == 200:
+                return body if body is not None else []
+            return {"up_votes": [], "down_votes": [], "results": [], "vote_count": 0}
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        # Map vote to a reaction emoji if possible
+        reaction = "👍" if str(payload.get("vote") or payload.get("value") or "up").lower() in ("1", "up", "upvote", "true") else "👎"
+        if request.method == "POST":
+            status, body, _ = await ce_post(
+                f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/reactions/",
+                request,
+                json_body={"reaction": reaction},
+            )
+            if status >= 400:
+                return {"ok": True, "reaction": reaction}
+            return body if body is not None else {"ok": True}
+        # DELETE
+        status, body, _ = await ce_delete(
+            f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/reactions/{reaction}/",
+            request,
+        )
+        return {"ok": True}
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/updates/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/updates")
+    async def work_item_updates(slug: str, project_id: str, issue_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        q = str(request.url.query or "")
+        path = f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/history/"
+        if q:
+            path = f"{path}?{q}"
+        status, body, _ = await ce_get(path, request)
+        if status != 200:
+            # empty updates rather than broken panel
+            return {"results": [], "count": 0, "next_cursor": None, "total_count": 0}
+        if isinstance(body, list):
+            return as_page(body)
+        return body
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/pages/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/pages")
+    async def work_item_pages_stub(slug: str, project_id: str, issue_id: str, request: Request):
+        return []
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/state-duration/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/state-duration")
+    async def work_item_state_duration_stub(slug: str, project_id: str, issue_id: str, request: Request):
+        return {"results": [], "total_duration": 0}
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/relations/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/relations")
+    async def work_item_relations(slug: str, project_id: str, issue_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/issue-relation/",
+            request,
+        )
+        if status != 200:
+            return []
+        return body if body is not None else []
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/relation-dependencies/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/relation-dependencies")
+    async def work_item_relation_deps(slug: str, project_id: str, issue_id: str, request: Request):
+        return []
+
+    @app.get("/api/workspaces/{slug}/enhanced-search/")
+    @app.get("/api/workspaces/{slug}/enhanced-search")
+    async def enhanced_search_alias(slug: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        q = str(request.url.query or "")
+        # Prefer entity-search, fall back to search
+        for base in (
+            f"/api/workspaces/{slug}/entity-search/",
+            f"/api/workspaces/{slug}/search/",
+        ):
+            path = f"{base}?{q}" if q else base
+            status, body, _ = await ce_get(path, request)
+            if status == 200:
+                return body if body is not None else {"results": []}
+        return {"results": [], "count": 0}
+
+    @app.get("/api/workspaces/{slug}/user-profile/{user_id}/project-stats/")
+    @app.get("/api/workspaces/{slug}/user-profile/{user_id}/project-stats")
+    async def user_profile_project_stats(slug: str, user_id: str, request: Request):
+        """My Work sidebar — per-project counts for the user."""
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        status, projects, body = await fetch_ce_projects(slug, request)
+        if status is not None:
+            return as_page([])
+        rows: List[Dict[str, Any]] = []
+        for p in projects[:40]:
+            pid = p.get("id")
+            if not pid:
+                continue
+            # Best-effort count of issues assigned to user in this project
+            st, ib, _ = await ce_get(
+                f"/api/workspaces/{slug}/projects/{pid}/issues/",
+                request,
+                params={
+                    "assignees": user_id,
+                    "per_page": "1",
+                    "cursor": "1:0:0",
+                },
+            )
+            total = 0
+            if st == 200 and isinstance(ib, dict):
+                total = int(ib.get("total_count") or ib.get("count") or ib.get("total_results") or 0)
+            rows.append(
+                {
+                    "project_id": pid,
+                    "project": pid,
+                    "id": pid,
+                    "name": p.get("name"),
+                    "identifier": p.get("identifier"),
+                    "total_issues": total,
+                    "completed_issues": 0,
+                    "pending_issues": total,
+                    "created_issues": 0,
+                    "subscribed_issues": 0,
+                }
+            )
+        return as_page(rows)
+
+    @app.get("/api/workspaces/{slug}/user-profile/{user_id}/user-work-items/")
+    @app.get("/api/workspaces/{slug}/user-profile/{user_id}/user-work-items")
+    @app.get("/api/workspaces/{slug}/user-profile/{user_id}/issues/")
+    @app.get("/api/workspaces/{slug}/user-profile/{user_id}/issues")
+    async def user_profile_work_items(slug: str, user_id: str, request: Request):
+        """My Work list — aggregate assigned issues across projects."""
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        status, projects, _ = await fetch_ce_projects(slug, request)
+        if status is not None:
+            return as_page([])
+        q = dict(request.query_params)
+        q.setdefault("assignees", user_id)
+        all_items: List[Dict[str, Any]] = []
+        for p in projects[:20]:
+            pid = p.get("id")
+            if not pid:
+                continue
+            st, body, _ = await ce_get(
+                f"/api/workspaces/{slug}/projects/{pid}/issues/",
+                request,
+                params=q or None,
+            )
+            if st != 200:
+                continue
+            if isinstance(body, dict):
+                results = body.get("results")
+                if isinstance(results, list):
+                    for it in results:
+                        if isinstance(it, dict):
+                            it.setdefault("project_id", pid)
+                            all_items.append(it)
+                elif isinstance(results, dict):
+                    for bucket in results.values():
+                        if isinstance(bucket, dict):
+                            for it in bucket.get("results") or []:
+                                if isinstance(it, dict):
+                                    it.setdefault("project_id", pid)
+                                    all_items.append(it)
+                        elif isinstance(bucket, list):
+                            for it in bucket:
+                                if isinstance(it, dict):
+                                    it.setdefault("project_id", pid)
+                                    all_items.append(it)
+            elif isinstance(body, list):
+                for it in body:
+                    if isinstance(it, dict):
+                        it.setdefault("project_id", pid)
+                        all_items.append(it)
+        return as_page(all_items)
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/issue-labels-lite/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/issue-labels-lite")
+    async def issue_labels_lite(slug: str, project_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/issue-labels/", request
+        )
+        if status != 200:
+            status, body, _ = await ce_get(f"/api/workspaces/{slug}/labels/", request)
+        if status != 200:
+            return []
+        if isinstance(body, dict) and "results" in body:
+            return body["results"]
+        return body if isinstance(body, list) else []
+
+    @app.get("/api/workspaces/{slug}/runnerctl/scripts/")
+    @app.get("/api/workspaces/{slug}/runnerctl/scripts")
+    async def runnerctl_scripts_stub(slug: str, request: Request):
+        return []
+
+    # ---- Export / download stubs (SPA expects 200 + file-ish payload, not 404) ----
+    @app.api_route(
+        "/api/workspaces/{slug}/export-issues/",
+        methods=["GET", "POST"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/export-issues",
+        methods=["GET", "POST"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/export-issues/",
+        methods=["GET", "POST"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/export-issues",
+        methods=["GET", "POST"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/issue-exports/",
+        methods=["GET", "POST"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/issue-exports",
+        methods=["GET", "POST"],
+    )
+    async def export_issues_stub(slug: str, request: Request, project_id: Optional[str] = None):
+        # Return an empty CSV so download buttons complete instead of spinning forever.
+        csv_body = "id,name,state,priority,assignees\n"
+        return Response(
+            content=csv_body,
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="export.csv"'},
+        )
+
+    @app.get("/api/workspaces/{slug}/exporters/")
+    @app.get("/api/workspaces/{slug}/exporters")
+    @app.post("/api/workspaces/{slug}/exporters/")
+    @app.post("/api/workspaces/{slug}/exporters")
+    async def exporters_stub(slug: str, request: Request):
+        if request.method == "GET":
+            return []
+        return {"id": str(uuid.uuid4()), "status": "completed", "url": None, "ok": True}
+
 
     @app.api_route("/api/payments/{path:path}", methods=["GET", "POST", "PATCH", "PUT", "DELETE"])
     async def payments_fallback(path: str, request: Request):

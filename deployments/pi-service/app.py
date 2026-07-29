@@ -33,7 +33,7 @@ STATIC_DIR = BASE_DIR / "static"
 
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = (os.environ.get("LLM_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/")
-LLM_MODEL = os.environ.get("LLM_MODEL") or "deepseek/deepseek-chat"
+LLM_MODEL = os.environ.get("LLM_MODEL") or "deepseek/deepseek-v4-flash"
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER") or "custom"
 DEFAULT_MODEL_ID = os.environ.get("PI_DEFAULT_MODEL") or LLM_MODEL
 # Plane API for agent tools (create/edit work items, pages, etc.)
@@ -50,6 +50,8 @@ ALLOWED_MODEL_PREFIXES = ("deepseek",)
 CHATS: Dict[str, Dict[str, Any]] = {}
 STREAMS: Dict[str, Dict[str, Any]] = {}
 FAVORITES: Dict[str, set] = {}
+ATTACHMENTS: Dict[str, Dict[str, Any]] = {}  # id -> meta
+ATTACHMENT_BYTES: Dict[str, bytes] = {}
 
 # Workspace wiki pages (cloud: /api/workspaces/{slug}/pages/) — CE lacks this; PI hosts it.
 WIKI_DATA_DIR = Path(os.environ.get("WIKI_DATA_DIR") or (BASE_DIR / "data" / "wiki"))
@@ -764,6 +766,19 @@ def strip_tool_call_artifacts(text: str) -> str:
     )
     cleaned = re.sub(r"(?m)^\s*(?:workspace_slug|query|project_id|issue_id)\s*[:=].*$", "", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    # Convert accidental HTML-only assistant blobs to plain text
+    # e.g. '<p class="font-normal">Hi</p>' should render as 'Hi'
+    if re.search(r"<\s*(p|div|span|br|strong|em|ul|ol|li|h[1-6])\b", cleaned, re.I):
+        plain = re.sub(r"<br\s*/?>", "\n", cleaned, flags=re.I)
+        plain = re.sub(r"</p\s*>", "\n\n", plain, flags=re.I)
+        plain = re.sub(r"<[^>]+>", "", plain)
+        plain = re.sub(r"&nbsp;", " ", plain)
+        plain = re.sub(r"&amp;", "&", plain)
+        plain = re.sub(r"&lt;", "<", plain)
+        plain = re.sub(r"&gt;", ">", plain)
+        plain = re.sub(r"\n{3,}", "\n\n", plain).strip()
+        if plain:
+            cleaned = plain
     # If nothing useful remains after stripping tool junk, say so clearly
     if not cleaned or cleaned in ("Thoughts", "Let me search for it.", "Let me search for it"):
         return ""
@@ -1641,16 +1656,12 @@ async def stream_answer(stream_token: str, request: Request):
             msgs.append({"role": m["role"], "content": m["content"]})
 
     async def event_gen():
-        reasoning_headers = [
-            "\n\nLooking for the cleanest angle...\n\n",
-            "\n\nWeighing which step moves us forward...\n\n",
-            "Generating final response...\n\n",
-        ]
         reasoning_log = []
-        for h in reasoning_headers:
-            reasoning_log.append({"chunk_type": "reasoning", "header": h, "content": ""})
-            yield "event: reasoning\ndata: " + json.dumps({"header": h, "content": ""}) + "\n\n"
-            await asyncio.sleep(0.05)
+
+        async def emit_reason(header: str, content: str = ""):
+            reasoning_log.append({"chunk_type": "reasoning", "header": header, "content": content})
+            yield_payload = "event: reasoning\ndata: " + json.dumps({"header": header, "content": content}) + "\n\n"
+            return yield_payload
 
         # Prefer tool-calling agent for action/find queries; stream the final answer
         q_lower = (job.get("query") or "").lower()
@@ -1689,8 +1700,28 @@ async def stream_answer(stream_token: str, request: Request):
             )
             or (job.get("mode") or "").lower() in ("build", "autopilot")
         )
+
+        # Progress messages timed to what is actually happening right now
+        if use_tools:
+            h = "\n\nSearching the workspace for matching work items...\n\n"
+            reasoning_log.append({"chunk_type": "reasoning", "header": h, "content": ""})
+            yield "event: reasoning\ndata: " + json.dumps({"header": h, "content": ""}) + "\n\n"
+            await asyncio.sleep(0.15)
+            h = "\n\nGathering context and deciding next steps...\n\n"
+            reasoning_log.append({"chunk_type": "reasoning", "header": h, "content": ""})
+            yield "event: reasoning\ndata: " + json.dumps({"header": h, "content": ""}) + "\n\n"
+            await asyncio.sleep(0.1)
+        else:
+            h = "\n\nReading your question and workspace context...\n\n"
+            reasoning_log.append({"chunk_type": "reasoning", "header": h, "content": ""})
+            yield "event: reasoning\ndata: " + json.dumps({"header": h, "content": ""}) + "\n\n"
+            await asyncio.sleep(0.1)
+
         full = []
         if use_tools:
+            h = "\n\nRunning tools and applying changes...\n\n"
+            reasoning_log.append({"chunk_type": "reasoning", "header": h, "content": ""})
+            yield "event: reasoning\ndata: " + json.dumps({"header": h, "content": ""}) + "\n\n"
             try:
                 answer = await run_agent_with_tools(
                     msgs,
@@ -1702,6 +1733,10 @@ async def stream_answer(stream_token: str, request: Request):
             except Exception as e:
                 answer = f"Agent error: {e}"
             answer = strip_tool_call_artifacts(answer)
+            h = "\n\nGenerating final response...\n\n"
+            reasoning_log.append({"chunk_type": "reasoning", "header": h, "content": ""})
+            yield "event: reasoning\ndata: " + json.dumps({"header": h, "content": ""}) + "\n\n"
+            await asyncio.sleep(0.05)
             # Fake-stream for UI parity
             step = 24
             for i in range(0, len(answer), step):
@@ -1710,6 +1745,10 @@ async def stream_answer(stream_token: str, request: Request):
                 yield "event: delta\ndata: " + json.dumps({"chunk": chunk}) + "\n\n"
                 await asyncio.sleep(0)
         else:
+            h = "\n\nGenerating final response...\n\n"
+            reasoning_log.append({"chunk_type": "reasoning", "header": h, "content": ""})
+            yield "event: reasoning\ndata: " + json.dumps({"header": h, "content": ""}) + "\n\n"
+            await asyncio.sleep(0.05)
             async for chunk in llm_stream(msgs, job.get("llm") or DEFAULT_MODEL_ID):
                 chunk = strip_tool_call_artifacts(chunk) if ("<" in chunk or "search_issues" in chunk) else chunk
                 if not chunk:
@@ -1932,7 +1971,30 @@ async def generate_title(body: ChatIdBody):
         (m["content"] for m in c.get("messages", []) if m.get("role") == "user"),
         c.get("title") or "New Conversation",
     )
-    title = (q[:48] + ("…" if len(q) > 48 else "")) if q else "New Conversation"
+    # Prefer DeepSeek-generated short title; fall back to truncated query
+    title = ""
+    if LLM_API_KEY and q:
+        try:
+            result = await llm_complete(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Generate a concise chat title (max 6 words) for the user message. "
+                            "Return ONLY the title text — no quotes, no punctuation fluff, no HTML."
+                        ),
+                    },
+                    {"role": "user", "content": str(q)[:500]},
+                ],
+                DEFAULT_MODEL_ID,
+            )
+            title = strip_tool_call_artifacts((result.get("content") or "").strip())
+            title = title.strip(" \"'`")
+            title = title.split("\n")[0].strip()[:80]
+        except Exception:
+            title = ""
+    if not title:
+        title = (q[:48] + ("…" if len(q) > 48 else "")) if q else "New Conversation"
     c["title"] = title
     c["last_modified"] = now_iso()
     return {"title": title}
@@ -2037,12 +2099,107 @@ async def list_artifacts(chat_id: str):
 
 @app.get("/api/v1/attachments/chat/")
 async def list_attachments(chat_id: Optional[str] = None):
-    return {"attachments": []}
+    rows = [
+        a for a in ATTACHMENTS.values()
+        if not chat_id or a.get("chat_id") == chat_id
+    ]
+    return {"attachments": rows}
 
 
 @app.post("/api/v1/attachments/upload-attachment/")
-async def upload_attachment():
-    return JSONResponse({"error": "File upload not configured on this instance."}, status_code=501)
+async def upload_attachment(request: Request):
+    """Accept multipart image/file uploads for Pilot chat (was 501 → stuck spinner)."""
+    form = await request.form()
+    upload = form.get("file") or form.get("attachment") or form.get("image")
+    chat_id = form.get("chat_id") or form.get("chatId") or ""
+    if upload is None:
+        # Some clients send raw body
+        raw = await request.body()
+        if not raw:
+            return JSONResponse({"error": "no file"}, status_code=400)
+        content = raw
+        filename = "upload.bin"
+        content_type = request.headers.get("content-type") or "application/octet-stream"
+    else:
+        content = await upload.read()  # type: ignore[attr-defined]
+        filename = getattr(upload, "filename", None) or "upload.bin"
+        content_type = getattr(upload, "content_type", None) or "application/octet-stream"
+    att_id = str(uuid.uuid4())
+    ATTACHMENT_BYTES[att_id] = content
+    meta = {
+        "id": att_id,
+        "attachment_id": att_id,
+        "chat_id": str(chat_id) if chat_id else None,
+        "name": filename,
+        "filename": filename,
+        "content_type": content_type,
+        "size": len(content),
+        "url": f"/api/v1/attachments/{att_id}/",
+        "created_at": now_iso(),
+        "status": "uploaded",
+    }
+    ATTACHMENTS[att_id] = meta
+    return meta
+
+
+@app.get("/api/v1/attachments/{attachment_id}/")
+async def get_attachment(attachment_id: str):
+    meta = ATTACHMENTS.get(attachment_id)
+    data = ATTACHMENT_BYTES.get(attachment_id)
+    if not meta or data is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return Response(
+        content=data,
+        media_type=meta.get("content_type") or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{meta.get("filename") or "file"}"'},
+    )
+
+
+@app.post("/api/v1/transcription/")
+@app.post("/api/v1/transcribe/")
+@app.post("/api/v1/audio/transcriptions/")
+@app.post("/api/v1/chat/transcribe/")
+async def transcribe_audio(request: Request):
+    """Whisper transcription via OpenRouter using the same LLM API key."""
+    if not LLM_API_KEY:
+        return JSONResponse({"error": "LLM_API_KEY not configured"}, status_code=503)
+    form = await request.form()
+    upload = form.get("file") or form.get("audio") or form.get("voice")
+    if upload is None:
+        raw = await request.body()
+        if not raw:
+            return JSONResponse({"error": "no audio"}, status_code=400)
+        content = raw
+        filename = "audio.webm"
+        content_type = request.headers.get("content-type") or "audio/webm"
+    else:
+        content = await upload.read()  # type: ignore[attr-defined]
+        filename = getattr(upload, "filename", None) or "audio.webm"
+        content_type = getattr(upload, "content_type", None) or "audio/webm"
+
+    # OpenRouter OpenAI-compatible audio transcriptions
+    url = f"{LLM_BASE_URL}/audio/transcriptions"
+    headers = {
+        "Authorization": f"Bearer {LLM_API_KEY}",
+        "HTTP-Referer": f"https://{APP_DOMAIN}",
+        "X-Title": "Plane Intelligence Transcription",
+    }
+    files = {"file": (filename, content, content_type)}
+    data = {"model": "openai/whisper-large-v3"}
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            r = await client.post(url, headers=headers, files=files, data=data)
+        if r.status_code >= 400:
+            # Fallback: some OpenRouter paths use chat with audio input
+            return JSONResponse(
+                {"error": f"transcription failed: {r.status_code}", "detail": r.text[:400]},
+                status_code=502,
+            )
+        body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {"text": r.text}
+        text = body.get("text") if isinstance(body, dict) else str(body)
+        return {"text": text or "", "transcript": text or "", "result": text or ""}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
 
 
 @app.get("/api/v1/chat/search/")
@@ -2074,13 +2231,48 @@ async def chat_search(
     return {"next_cursor": None, "count": len(results), "results": results}
 
 
+@app.post("/api/v1/pql/translate/")
+@app.post("/api/v1/pql/translate")
+async def pql_translate(request: Request):
+    """AI Filter — natural language → Plane query language via DeepSeek."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    query = (body.get("query") or body.get("prompt") or body.get("text") or "").strip()
+    if not query:
+        return {"pql": "", "query": "", "filters": {}, "result": ""}
+    if not LLM_API_KEY:
+        return {"pql": query, "query": query, "filters": {}, "result": query}
+    system = (
+        "You convert natural language work-item filters into Plane PQL (Plane Query Language). "
+        "Return ONLY the PQL expression string, no markdown, no explanation. "
+        "Examples: assignee = me AND state.group != completed ; priority = high ; "
+        "label = bug AND created_at >= -7d"
+    )
+    try:
+        result = await llm_complete(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": query},
+            ],
+            DEFAULT_MODEL_ID,
+        )
+        pql = strip_tool_call_artifacts((result.get("content") or "").strip())
+        pql = pql.strip("`").strip()
+        if pql.lower().startswith("pql:"):
+            pql = pql[4:].strip()
+    except Exception as e:
+        pql = query
+    return {"pql": pql, "query": pql, "filters": {}, "result": pql, "text": pql}
+
+
 # Soft stubs so commercial UI feature calls do not hard-fail
 @app.post("/api/v1/pages/summarize/")
 @app.post("/api/v1/pages-edits/")
 @app.post("/api/v1/pages/blocks/generate/")
 @app.post("/api/v1/pages/blocks/revision/")
 @app.post("/api/v1/wi-desc-edits/")
-@app.post("/api/v1/pql/translate/")
 @app.post("/api/v1/predictions/{entity}/")
 @app.post("/api/v1/dupes/issues/")
 @app.post("/api/v1/dupes/issues/feedback/")

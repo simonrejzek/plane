@@ -108,6 +108,33 @@
 	}
 	reverse_proxy @proj_work_items pi:8080
 
+	# Commercial SPA work-item detail/side panels (CE only has /issues/)
+	@proj_work_item_detail path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/work-items/[^/]+
+	reverse_proxy @proj_work_item_detail pi:8080
+
+	# Subscribe paths use commercial /subscribers/ (CE: issue-subscribers/subscribe)
+	@issue_subscribers path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/(issues|work-items)/[^/]+/subscribers
+	reverse_proxy @issue_subscribers pi:8080
+
+	# Enhanced search + runnerctl + labels-lite + my-work profile
+	@ws_enhanced_search path_regexp ^/api/workspaces/[^/]+/enhanced-search/?$
+	reverse_proxy @ws_enhanced_search pi:8080
+
+	@ws_runnerctl path_regexp ^/api/workspaces/[^/]+/runnerctl/
+	reverse_proxy @ws_runnerctl pi:8080
+
+	@proj_labels_lite path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/issue-labels-lite/?$
+	reverse_proxy @proj_labels_lite pi:8080
+
+	@ws_user_profile path_regexp ^/api/workspaces/[^/]+/user-profile/
+	reverse_proxy @ws_user_profile pi:8080
+
+	@ws_export path_regexp ^/api/workspaces/[^/]+/(export-issues|exporters)/?
+	reverse_proxy @ws_export pi:8080
+
+	@proj_export path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/(export-issues|issue-exports)/?
+	reverse_proxy @proj_export pi:8080
+
 	@proj_issues_tc {
 		method GET
 		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/issues/total-count/?$
