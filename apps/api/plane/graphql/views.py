@@ -267,6 +267,67 @@ class CustomGraphQLView(AsyncGraphQLView):
                     ],
                 )
         else:
+            # --- mobile product-surface diagnostics (temporary but high-signal) ---
+            # Extract selected GraphQL fields (best-effort from request body).
+            fields = sorted(
+                set(
+                    re.findall(
+                        r"\b([A-Za-z][A-Za-z0-9_]{1,60})\b",
+                        # strip variables/operations noise; keep selection-ish tokens
+                        re.sub(
+                            r"\$[A-Za-z0-9_]+|query|mutation|fragment|on|__typename|String|Boolean|Int|ID|!",
+                            " ",
+                            body,
+                        ),
+                    )
+                )
+            )
+            # Drop common noise tokens
+            noise = {
+                "operationName",
+                "variables",
+                "query",
+                "mutation",
+                "true",
+                "false",
+                "null",
+                "slug",
+                "cursor",
+                "first",
+                "last",
+                "after",
+                "before",
+            }
+            fields = [f for f in fields if f not in noise and not f.isupper()][:80]
+
+            # Slice interesting response payloads for AI/wiki gates
+            interesting = {}
+            if isinstance(result.data, dict):
+                for key in (
+                    "featureFlag",
+                    "workspaceFeatures",
+                    "workspaceLicense",
+                    "instance",
+                ):
+                    if key in result.data:
+                        interesting[key] = result.data.get(key)
+                # Also catch nested under data root aliases
+                for k, v in result.data.items():
+                    if isinstance(v, dict) and any(
+                        x in k.lower()
+                        for x in ("feature", "pi", "wiki", "license", "flag")
+                    ):
+                        interesting[k] = v
+
+            import json as _json
+
+            payload_snip = ""
+            if interesting:
+                try:
+                    payload_snip = _json.dumps(interesting, default=str)[:2500]
+                except Exception:
+                    payload_snip = str(interesting)[:2500]
+
             if is_mutation:
                 keys = (
                     list((result.data or {}).keys())
@@ -279,16 +340,54 @@ class CustomGraphQLView(AsyncGraphQLView):
                     op_name,
                     keys,
                 )
-            elif user_id and op_name in (
-                "userInformationAndWorkspacesQuery",
-                "UserFavoritesQuery",
-                "stickies",
-            ):
+            else:
+                # Log EVERY successful query so we can see mobile home gates.
                 log.info(
-                    "GQL_OK user=%s op=%s src=%s",
+                    "GQL_OK user=%s op=%s src=%s fields=%s data_keys=%s payload=%s",
                     user_id,
-                    op_name,
+                    op_name or "<anon>",
                     auth_src,
+                    fields,
+                    list((result.data or {}).keys())
+                    if isinstance(result.data, dict)
+                    else [],
+                    payload_snip or "-",
                 )
+
+        # Approach A: force commercial product surface fields into GraphQL JSON
+        # even when the official mobile client does not select them.
+        # Typed clients ignore extras; map/JSON clients may read isPiEnabled/piChat*.
+        try:
+            data = processed_result.get("data")
+            if isinstance(data, dict):
+                ff = data.get("featureFlag")
+                if isinstance(ff, dict):
+                    ff.setdefault("piChat", True)
+                    ff.setdefault("piChatMobile", True)
+                    ff.setdefault("piDedupe", True)
+                    ff.setdefault("piDedupeMobile", True)
+                    ff.setdefault("workspacePages", True)
+                    # Also force common aliases some clients might normalize
+                    ff["piChat"] = True
+                    ff["piChatMobile"] = True
+                    data["featureFlag"] = ff
+                wf = data.get("workspaceFeatures")
+                if isinstance(wf, dict):
+                    wf["isPiEnabled"] = True
+                    wf["isWikiEnabled"] = True
+                    # snake_case variants (defensive)
+                    wf["is_pi_enabled"] = True
+                    wf["is_wiki_enabled"] = True
+                    data["workspaceFeatures"] = wf
+                processed_result["data"] = data
+                if isinstance(ff, dict) or isinstance(wf, dict):
+                    log.info(
+                        "GQL_PRODUCT_INJECT op=%s featureFlag_pi=%s workspace_pi=%s",
+                        op_name,
+                        (ff or {}).get("piChatMobile") if isinstance(ff, dict) else None,
+                        (wf or {}).get("isPiEnabled") if isinstance(wf, dict) else None,
+                    )
+        except Exception as e:
+            log.warning("GQL_PRODUCT_INJECT_FAIL op=%s err=%s", op_name, e)
 
         return processed_result
