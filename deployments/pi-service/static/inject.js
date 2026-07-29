@@ -11,6 +11,37 @@
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
 
+  // Force fixed English i18n dictionary (ICU plurals expanded) even if CDN/web caches old asset
+  (function loadFixedI18n() {
+    try {
+      var u = "/cosmic-pilot/en-i18n-fallbacks-v7.js?v=19";
+      fetch(u, { credentials: "same-origin", cache: "no-store" })
+        .then(function (r) { return r.text(); })
+        .then(function (txt) {
+          try {
+            // file is: window.__PLANE_EN_I18N__={...}
+            // eval in isolated way
+            var fn = new Function(txt + ";return window.__PLANE_EN_I18N__ || (typeof __PLANE_EN_I18N__!=='undefined'?__PLANE_EN_I18N__:null);");
+            var dict = fn();
+            if (dict && typeof dict === "object") {
+              window.__PLANE_EN_I18N__ = dict;
+              // If i18next already initialized, merge
+              try {
+                if (window.i18n && window.i18n.addResourceBundle) {
+                  window.i18n.addResourceBundle("en", "translations", dict, true, true);
+                  window.i18n.addResourceBundle("en", "common", dict, true, true);
+                }
+              } catch (_) {}
+            }
+          } catch (e) {
+            console.warn("cosmic i18n merge failed", e);
+          }
+        })
+        .catch(function () {});
+    } catch (_) {}
+  })();
+
+
   const path = location.pathname || "";
   if (
     path.startsWith("/sign-in") ||

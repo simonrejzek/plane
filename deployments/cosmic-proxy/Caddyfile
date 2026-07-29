@@ -15,9 +15,11 @@
 	reverse_proxy /api/v1/* pi:8080
 	reverse_proxy /cosmic-pilot/* pi:8080
 	reverse_proxy /cosmic-pilot-inject.js pi:8080
-	# Patched English i18n (ICU plurals expanded) — override SPA asset
-	@en_i18n path /assets/en-i18n-fallbacks-v7.js /assets/en-i18n-fallbacks-v7.js/
+	# Patched English i18n (ICU plurals expanded) — override SPA asset.
+	# Rewrite to PI static path that is known to serve the fixed dictionary.
+	@en_i18n path_regexp eni18n ^/assets/en-i18n-fallbacks-v7\.js/?$
 	handle @en_i18n {
+		rewrite * /cosmic-pilot/en-i18n-fallbacks-v7.js
 		reverse_proxy pi:8080
 	}
 

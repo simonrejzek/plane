@@ -2366,7 +2366,14 @@ async def get_skill(skill_id: str, workspace_slug: Optional[str] = None):
 def en_i18n_fallbacks():
     path = STATIC_DIR / "en-i18n-fallbacks-v7.js"
     if path.exists():
-        return FileResponse(path, media_type="application/javascript")
+        return FileResponse(
+            path,
+            media_type="application/javascript",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
     return JSONResponse({"error": "missing"}, status_code=404)
 
 
