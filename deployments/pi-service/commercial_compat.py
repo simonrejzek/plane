@@ -553,7 +553,8 @@ def register_commercial_compat(app: FastAPI) -> None:
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        return []
+        # commercial store does t.results.forEach(...)
+        return {"results": [], "count": 0, "total_count": 0, "next_cursor": None, "next_page_results": False}
 
     @app.get("/api/workspaces/{slug}/work-item-types/")
     async def work_item_types(slug: str, request: Request):
@@ -626,6 +627,30 @@ def register_commercial_compat(app: FastAPI) -> None:
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         return []
+
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/issues/meta/")
+    async def issues_meta(slug: str, project_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        # minimal meta object commercial board tolerates
+        return {"count": 0, "total_count": 0, "results": []}
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/")
+    async def work_items_alias(slug: str, project_id: str, request: Request):
+        """Alias commercial work-items list to CE issues, preserving query string."""
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        q = str(request.url.query or "")
+        path = f"/api/workspaces/{slug}/projects/{project_id}/issues/"
+        if q:
+            path = f"{path}?{q}"
+        status, body, _ = await ce_get(path, request)
+        if status != 200:
+            return JSONResponse(body if isinstance(body, (dict, list)) else {"error": str(body)}, status_code=status)
+        return body
 
     @app.api_route("/api/payments/{path:path}", methods=["GET", "POST", "PATCH", "PUT", "DELETE"])
     async def payments_fallback(path: str, request: Request):

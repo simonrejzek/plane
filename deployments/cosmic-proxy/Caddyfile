@@ -75,6 +75,19 @@
 	}
 	reverse_proxy @proj_cycles_lite pi:8080
 
+
+	@proj_issues_meta {
+		method GET
+		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/issues/meta/?$
+	}
+	reverse_proxy @proj_issues_meta pi:8080
+
+	@proj_work_items {
+		method GET
+		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/work-items/?$
+	}
+	reverse_proxy @proj_work_items pi:8080
+
 	@proj_issues_tc {
 		method GET
 		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/issues/total-count/?$
