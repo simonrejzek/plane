@@ -700,6 +700,8 @@ def inject_js():
 # ---------------------------------------------------------------------------
 
 
+# Also expose under /api/v1/wiki/... so routing always hits PI (Caddy /api/v1/* → pi)
+@app.get("/api/v1/wiki/workspaces/{slug}/pages/")
 @app.get("/api/workspaces/{slug}/pages/")
 def wiki_list_pages(slug: str, cursor: Optional[str] = None, per_page: int = 100):
     pages = list(load_wiki(slug).values())
@@ -725,6 +727,7 @@ def wiki_list_pages(slug: str, cursor: Optional[str] = None, per_page: int = 100
     }
 
 
+@app.post("/api/v1/wiki/workspaces/{slug}/pages/")
 @app.post("/api/workspaces/{slug}/pages/")
 async def wiki_create_page(slug: str, request: Request):
     try:
@@ -770,6 +773,7 @@ async def wiki_create_page(slug: str, request: Request):
     return page_public(page, include_body=True)
 
 
+@app.get("/api/v1/wiki/workspaces/{slug}/pages/{page_id}/")
 @app.get("/api/workspaces/{slug}/pages/{page_id}/")
 def wiki_get_page(slug: str, page_id: str):
     pages = load_wiki(slug)
@@ -779,6 +783,7 @@ def wiki_get_page(slug: str, page_id: str):
     return page_public(page, include_body=True)
 
 
+@app.patch("/api/v1/wiki/workspaces/{slug}/pages/{page_id}/")
 @app.patch("/api/workspaces/{slug}/pages/{page_id}/")
 async def wiki_patch_page(slug: str, page_id: str, request: Request):
     pages = load_wiki(slug)
@@ -809,6 +814,7 @@ async def wiki_patch_page(slug: str, page_id: str, request: Request):
     return page_public(page, include_body=True)
 
 
+@app.delete("/api/v1/wiki/workspaces/{slug}/pages/{page_id}/")
 @app.delete("/api/workspaces/{slug}/pages/{page_id}/")
 def wiki_delete_page(slug: str, page_id: str):
     pages = load_wiki(slug)
@@ -818,6 +824,7 @@ def wiki_delete_page(slug: str, page_id: str):
     return Response(status_code=204)
 
 
+@app.get("/api/v1/wiki/workspaces/{slug}/pages/{page_id}/description/")
 @app.get("/api/workspaces/{slug}/pages/{page_id}/description/")
 def wiki_get_description(slug: str, page_id: str):
     pages = load_wiki(slug)
@@ -831,6 +838,7 @@ def wiki_get_description(slug: str, page_id: str):
     }
 
 
+@app.patch("/api/v1/wiki/workspaces/{slug}/pages/{page_id}/description/")
 @app.patch("/api/workspaces/{slug}/pages/{page_id}/description/")
 async def wiki_patch_description(slug: str, page_id: str, request: Request):
     pages = load_wiki(slug)

@@ -24,6 +24,14 @@
     return m ? decodeURIComponent(m[1]) : "";
   }
 
+  // Prefer cloud-compatible workspace pages path; fall back to PI-native path.
+  function pagesBase() {
+    return `/api/workspaces/${encodeURIComponent(workspace)}/pages`;
+  }
+  function pagesBaseFallback() {
+    return `/api/v1/wiki/workspaces/${encodeURIComponent(workspace)}/pages`;
+  }
+
   async function api(path, opts = {}) {
     const res = await fetch(path, {
       method: opts.method || "GET",
@@ -43,6 +51,17 @@
     const ct = res.headers.get("content-type") || "";
     if (ct.includes("application/json")) return res.json();
     return res.text();
+  }
+
+  async function pagesApi(suffix, opts = {}) {
+    const primary = `${pagesBase()}${suffix}`;
+    try {
+      return await api(primary, opts);
+    } catch (e) {
+      // CE / mis-routed proxy → PI-native wiki API under /api/v1 (always on PI)
+      const fb = `${pagesBaseFallback()}${suffix}`;
+      return api(fb, opts);
+    }
   }
 
   function fmtDate(iso) {
@@ -84,7 +103,7 @@
       listEl.innerHTML = `<div style="padding:12px;color:#9aa0a6;font-size:13px">Missing workspace slug</div>`;
       return;
     }
-    const data = await api(`/api/workspaces/${encodeURIComponent(workspace)}/pages/`);
+    const data = await pagesApi(`/`);
     const results = Array.isArray(data) ? data : data?.results || [];
     state.pages = results;
     renderList($("#wiki-search").value || "");
@@ -98,7 +117,7 @@
 
   async function openPage(id) {
     if (state.dirty && !confirm("Discard unsaved changes?")) return;
-    const page = await api(`/api/workspaces/${encodeURIComponent(workspace)}/pages/${id}/`);
+    const page = await pagesApi(`/${id}/`);
     state.activeId = id;
     state.dirty = false;
     emptyEl.classList.add("hidden");
@@ -117,7 +136,7 @@
 
   async function createPage() {
     const name = prompt("Page title", "Untitled") || "Untitled";
-    const page = await api(`/api/workspaces/${encodeURIComponent(workspace)}/pages/`, {
+    const page = await pagesApi(`/`, {
       method: "POST",
       body: { name },
     });
@@ -132,7 +151,7 @@
       description_html: `<p>${escapeHtml(bodyEl.value).replace(/\n/g, "<br>")}</p>`,
       description: bodyEl.value,
     };
-    await api(`/api/workspaces/${encodeURIComponent(workspace)}/pages/${state.activeId}/`, {
+    await pagesApi(`/${state.activeId}/`, {
       method: "PATCH",
       body,
     });
@@ -144,7 +163,7 @@
   async function deletePage() {
     if (!state.activeId) return;
     if (!confirm("Delete this page?")) return;
-    await api(`/api/workspaces/${encodeURIComponent(workspace)}/pages/${state.activeId}/`, {
+    await pagesApi(`/${state.activeId}/`, {
       method: "DELETE",
     });
     state.activeId = null;
