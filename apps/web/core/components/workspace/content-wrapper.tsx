@@ -23,12 +23,17 @@ export const WorkspaceContentWrapper = observer(function WorkspaceContentWrapper
   return (
     <div className="relative flex size-full flex-col overflow-hidden bg-canvas transition-all duration-300 ease-in-out">
       <TopNavigationRoot />
-      <div className="relative flex size-full overflow-hidden">
+      {/*
+        flex-1 + min-h-0 is required when TopNavigation is a sibling of the main row.
+        Using size-full (h-full) here collapses/clips project content (issues, modules, views)
+        under the App Rail shell because the top nav already consumed height.
+      */}
+      <div className="relative flex min-h-0 w-full flex-1 overflow-hidden">
         {/* Conditionally render AppRailRoot based on context */}
         {shouldRenderAppRail && <AppRailRoot />}
         <div
           className={cn(
-            "relative size-full flex-grow overflow-hidden pr-2 pb-2 pl-2 transition-all duration-300 ease-in-out",
+            "relative min-h-0 w-full flex-1 overflow-hidden pr-2 pb-2 pl-2 transition-all duration-300 ease-in-out",
             {
               "pl-0!": shouldRenderAppRail,
             }

@@ -144,7 +144,14 @@ export const ProjectAuthWrapper = observer(function ProjectAuthWrapper(props: IP
 
   const isProjectLoading = (isParentLoading || isProjectDetailsLoading) && !projectDetailsError;
 
-  if (isProjectLoading) return null;
+  // Avoid a blank screen while project auth/details load (App Rail shell makes this look "broken").
+  if (isProjectLoading) {
+    return (
+      <div className="flex h-full w-full items-center justify-center">
+        <div className="text-13 text-secondary">Loading project…</div>
+      </div>
+    );
+  }
 
   if (!isProjectLoading && hasPermissionToCurrentProject === false) {
     return (
