@@ -11,34 +11,52 @@
 
 	reverse_proxy /live/* live:3000
 
-	# Plane Intelligence (Pilot AI) — DeepSeek-only self-host PI service
-	# MUST be before generic /api/* so path specificity wins reliably.
+	# Plane Intelligence (Pilot AI) — before generic /api/*
 	reverse_proxy /api/v1/* pi:8080
 	reverse_proxy /cosmic-pilot/* pi:8080
 	reverse_proxy /cosmic-pilot-inject.js pi:8080
 
-	# Commercial Business SPA ↔ CE compatibility layer (hosted on PI).
-	# Without these, the mirrored UI shows "Workspace not found" on every page
-	# because CE has no /permissions/, /payments/..., /features/, etc.
-	# Does NOT touch Postgres — read membership from CE, synthesize cloud-shaped JSON.
-	@commercial_compat {
-		path /api/payments/*
-		path /api/users/me/workspaces/
-		path /api/users/me/workspaces
-		path_regexp ws_perms ^/api/workspaces/[^/]+/permissions/?$
-		path_regexp ws_features ^/api/workspaces/[^/]+/features/?$
-		path_regexp ws_roles ^/api/workspaces/[^/]+/roles/?$
-		path_regexp ws_schemes ^/api/workspaces/[^/]+/permission-schemes/?$
-		path_regexp ws_wpf ^/api/workspaces/[^/]+/workspace-project-features/?$
-		path_regexp proj_feat ^/api/workspaces/[^/]+/projects/[^/]+/features/?$
-		path_regexp ws_teamspaces ^/api/workspaces/[^/]+/teamspaces/?$
-		path_regexp ws_customers ^/api/workspaces/[^/]+/customers/?$
-		path_regexp ws_releases ^/api/workspaces/[^/]+/releases(-lite)?/?$
-		path_regexp ws_initiatives ^/api/workspaces/[^/]+/initiatives/?$
-		# Wiki pages live on PI (CE lacks workspace-level pages API)
-		path_regexp ws_wiki_pages ^/api/workspaces/[^/]+/pages
-	}
-	reverse_proxy @commercial_compat pi:8080
+	# Commercial SPA ↔ CE compatibility (hosted on PI).
+	# Each reverse_proxy path is OR'd within its matcher; keep them separate
+	# so Caddy does not AND unrelated path_regexps together.
+	reverse_proxy /api/payments/* pi:8080
+	reverse_proxy /api/users/me/workspaces/ pi:8080
+	reverse_proxy /api/users/me/workspaces pi:8080
+
+	# Workspace-scoped commercial endpoints (regex matchers)
+	@ws_permissions path_regexp ^/api/workspaces/[^/]+/permissions/?$
+	reverse_proxy @ws_permissions pi:8080
+
+	@ws_features path_regexp ^/api/workspaces/[^/]+/features/?$
+	reverse_proxy @ws_features pi:8080
+
+	@ws_roles path_regexp ^/api/workspaces/[^/]+/roles/?$
+	reverse_proxy @ws_roles pi:8080
+
+	@ws_schemes path_regexp ^/api/workspaces/[^/]+/permission-schemes/?$
+	reverse_proxy @ws_schemes pi:8080
+
+	@ws_wpf path_regexp ^/api/workspaces/[^/]+/workspace-project-features/?$
+	reverse_proxy @ws_wpf pi:8080
+
+	@proj_features path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/features/?$
+	reverse_proxy @proj_features pi:8080
+
+	@ws_teamspaces path_regexp ^/api/workspaces/[^/]+/teamspaces/?$
+	reverse_proxy @ws_teamspaces pi:8080
+
+	@ws_customers path_regexp ^/api/workspaces/[^/]+/customers/?$
+	reverse_proxy @ws_customers pi:8080
+
+	@ws_releases path_regexp ^/api/workspaces/[^/]+/releases(-lite)?/?$
+	reverse_proxy @ws_releases pi:8080
+
+	@ws_initiatives path_regexp ^/api/workspaces/[^/]+/initiatives/?$
+	reverse_proxy @ws_initiatives pi:8080
+
+	# Wiki pages live on PI (CE lacks workspace-level pages API)
+	@ws_wiki_pages path_regexp ^/api/workspaces/[^/]+/pages
+	reverse_proxy @ws_wiki_pages pi:8080
 
 	# CE API (projects, issues, modules, labels, worklogs, auth, …)
 	reverse_proxy /api/* api:8000
