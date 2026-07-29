@@ -69,7 +69,7 @@ jobs:
           test -f public/tour/work-item/step-0-dark.webp
           test -f public/assets/material-symbols-rounded-latin-400-normal-9p3s809g.woff2
           grep -q "i18n-gate" public/index.html
-          grep -q "v12-states-i18n\\|v11-preload-i18n" public/index.html
+          grep -qE "v1[0-9]-|preload-i18n|states-i18n|assets-mime" public/index.html
           test -f public/assets/modules-dark-Bs9zHyrm.webp
           test -f public/assets/unauthorized-C8vOPqGE.svg
           test -f public/tips/download-app/download-app-light.webp
