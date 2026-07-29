@@ -44,13 +44,13 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v2
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v3
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
 
       - name: Mirror to ttl.sh
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v2
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v2 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v2
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v2
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v3
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v3 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v3
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v3
