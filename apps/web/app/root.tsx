@@ -80,6 +80,8 @@ export function Layout({ children }: { children: ReactNode }) {
           {children}
         </ThemeProvider>
         <Scripts />
+        {/* Cosmic shell: full-page Wiki + Pilot takeover + dock polish */}
+        <Script src="/cosmic-pilot/static/inject.js" strategy="afterInteractive" />
         {!!isSessionRecorderEnabled && process.env.VITE_SESSION_RECORDER_KEY && (
           <Script id="clarity-tracking">
             {`(function(c,l,a,r,i,t,y){

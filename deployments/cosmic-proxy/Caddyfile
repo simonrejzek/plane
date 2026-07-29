@@ -11,6 +11,15 @@
 
 	reverse_proxy /live/* live:3000
 
+	# Plane Intelligence (Pilot AI) — must come before generic /api/*
+	reverse_proxy /api/v1/* pi:8080
+
+	# Workspace Wiki API (cloud parity; CE lacks workspace-level pages)
+	@wiki_pages path_regexp wiki_pages ^/api/workspaces/[^/]+/pages(/.*)?$
+	handle @wiki_pages {
+		reverse_proxy pi:8080
+	}
+
 	reverse_proxy /api/* api:8000
 
 	reverse_proxy /auth/* api:8000
@@ -24,10 +33,13 @@
 	reverse_proxy /{$BUCKET_NAME}/* plane-minio:9000
 	reverse_proxy /{$BUCKET_NAME} plane-minio:9000
 
-	# Plane Intelligence (Pilot AI) — DeepSeek-only self-host PI service
-	reverse_proxy /api/v1/* pi:8080
-	reverse_proxy /cosmic-pilot/* pi:8080
-	reverse_proxy /cosmic-pilot-inject.js pi:8080
+	# Pilot UI + inject (multiple paths for reliability)
+	handle /cosmic-pilot/* {
+		reverse_proxy pi:8080
+	}
+	handle /cosmic-pilot-inject.js {
+		reverse_proxy pi:8080
+	}
 
 	# SPA routes including /m/auth
 	reverse_proxy /* web:3000

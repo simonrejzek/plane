@@ -358,7 +358,7 @@
       renderThreads();
       // update URL without reload when in full page mode
       if (!qs.get("embed") && state.workspaceSlug) {
-        history.replaceState({}, "", `/${state.workspaceSlug}/ai-chat/${chatId}`);
+        history.replaceState({}, "", `/${state.workspaceSlug}/pi-chat/${chatId}`);
       }
     } catch (e) {
       console.warn("history", e);

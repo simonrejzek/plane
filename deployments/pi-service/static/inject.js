@@ -32,6 +32,7 @@
     iframe.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0";
     body.appendChild(iframe);
     document.documentElement.appendChild(body);
+    document.title = "Wiki · Plane";
     return;
   }
 
@@ -50,75 +51,99 @@
     iframe.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;background:#0e0f10";
     body.appendChild(iframe);
     document.documentElement.appendChild(body);
+    document.title = "AI · Plane Intelligence";
     return;
+  }
+
+  function workspaceSlug() {
+    return (path.split("/").filter(Boolean)[0] || "").trim();
+  }
+
+  function hideNode(node) {
+    if (!node || !node.style) return;
+    node.style.display = "none";
+    node.setAttribute("data-cosmic-hidden", "1");
+  }
+
+  function isDashboardsLink(a) {
+    const href = (a.getAttribute("href") || "").toLowerCase();
+    const label = (a.textContent || "").trim().toLowerCase();
+    const title = (a.getAttribute("title") || "").toLowerCase();
+    const aria = (a.getAttribute("aria-label") || "").toLowerCase();
+    return (
+      href.includes("/dashboards") ||
+      label === "dashboards" ||
+      label === "dashboard" ||
+      title === "dashboards" ||
+      aria === "dashboards"
+    );
+  }
+
+  function findRail() {
+    return (
+      document.querySelector("[class*='app-rail']") ||
+      document.querySelector("[class*='AppRail']") ||
+      document.querySelector("aside nav") ||
+      document.querySelector("nav") ||
+      null
+    );
+  }
+
+  function ensureDockLink(rail, slug, href, title, glyph, bg, color) {
+    const existing = Array.from(document.querySelectorAll("a[href]")).some((a) =>
+      (a.getAttribute("href") || "").includes(href.replace(/\/$/, ""))
+    );
+    if (existing) return;
+    let wrap = document.getElementById("cosmic-dock-extra");
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = "cosmic-dock-extra";
+      wrap.style.cssText =
+        "display:flex;flex-direction:column;gap:6px;padding:8px 0;align-items:center";
+      rail.appendChild(wrap);
+    }
+    if (wrap.querySelector(`a[data-cosmic-dock="${title}"]`)) return;
+    const a = document.createElement("a");
+    a.href = href;
+    a.title = title;
+    a.setAttribute("data-cosmic-dock", title);
+    a.setAttribute("aria-label", title);
+    a.textContent = glyph;
+    a.style.cssText = `width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:${bg};color:${color};text-decoration:none;font-weight:700;font-size:13px;margin:2px 0`;
+    wrap.appendChild(a);
   }
 
   // --- Patch app rail dock: remove Dashboards, ensure Wiki + AI ---
   function patchDock() {
     try {
-      const links = Array.from(document.querySelectorAll("a[href]"));
-      const slug = (path.split("/").filter(Boolean)[0] || "").trim();
-      if (!slug) return;
+      const slug = workspaceSlug();
+      if (!slug || slug === "api" || slug === "auth") return;
 
-      // Hide dashboards dock entries
-      links.forEach((a) => {
-        const href = a.getAttribute("href") || "";
-        const label = (a.textContent || "").trim().toLowerCase();
-        if (href.includes(`/${slug}/dashboards`) || label === "dashboards") {
-          const item = a.closest("[class*='rail'], [class*='dock'], button, a") || a;
-          if (item && item.style) item.style.display = "none";
-          // also hide parent list item
-          let p = a.parentElement;
-          for (let i = 0; i < 4 && p; i++) {
-            if (p.querySelectorAll("a").length <= 2) {
-              p.style.display = "none";
-              break;
+      const links = Array.from(document.querySelectorAll("a[href], button"));
+      links.forEach((el) => {
+        if (el.tagName === "A" && isDashboardsLink(el)) {
+          // climb to dock item container
+          let p = el;
+          for (let i = 0; i < 6 && p; i++) {
+            const text = (p.textContent || "").trim().toLowerCase();
+            if (text === "dashboards" || text === "dashboard" || (p.getAttribute("href") || "").includes("/dashboards")) {
+              hideNode(p);
             }
             p = p.parentElement;
           }
+          hideNode(el);
+        }
+        // also hide pure label nodes
+        if ((el.textContent || "").trim().toLowerCase() === "dashboards") {
+          const item = el.closest("a, button, [role='link'], li, div");
+          if (item) hideNode(item);
         }
       });
 
-      // Inject Wiki / AI dock chips if missing (best-effort visual parity)
-      const hasWiki = links.some((a) => (a.getAttribute("href") || "").includes(`/${slug}/wiki`));
-      const hasAi = links.some(
-        (a) =>
-          (a.getAttribute("href") || "").includes(`/${slug}/pi-chat`) ||
-          (a.getAttribute("href") || "").includes(`/${slug}/ai-chat`)
-      );
-      if (hasWiki && hasAi) return;
-
-      // Find a vertical rail-ish container near left edge
-      let rail =
-        document.querySelector("[class*='app-rail']") ||
-        document.querySelector("[class*='AppRail']") ||
-        document.querySelector("nav");
+      const rail = findRail();
       if (!rail) return;
-      if (!document.getElementById("cosmic-dock-extra")) {
-        const wrap = document.createElement("div");
-        wrap.id = "cosmic-dock-extra";
-        wrap.style.cssText =
-          "display:flex;flex-direction:column;gap:6px;padding:8px;align-items:center";
-        if (!hasWiki) {
-          const a = document.createElement("a");
-          a.href = `/${slug}/wiki/`;
-          a.title = "Wiki";
-          a.textContent = "W";
-          a.style.cssText =
-            "width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:#1e1b4b;color:#c4b5fd;text-decoration:none;font-weight:700;font-size:13px";
-          wrap.appendChild(a);
-        }
-        if (!hasAi) {
-          const a = document.createElement("a");
-          a.href = `/${slug}/pi-chat/`;
-          a.title = "AI / Pilot";
-          a.textContent = "π";
-          a.style.cssText =
-            "width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:#172554;color:#93c5fd;text-decoration:none;font-weight:700;font-size:16px";
-          wrap.appendChild(a);
-        }
-        rail.appendChild(wrap);
-      }
+      ensureDockLink(rail, slug, `/${slug}/wiki/`, "Wiki", "W", "#1e1b4b", "#c4b5fd");
+      ensureDockLink(rail, slug, `/${slug}/pi-chat/`, "AI", "π", "#172554", "#93c5fd");
     } catch (_) {}
   }
 
@@ -175,13 +200,27 @@
   const t = setInterval(() => {
     tries += 1;
     if (document.body) boot();
-    if (tries > 30) clearInterval(t);
-  }, 500);
+    if (tries > 40) clearInterval(t);
+  }, 400);
 
-  // SPA route changes
+  // SPA route changes — reload so wiki/ai full-page takeovers apply
   const _push = history.pushState;
+  const _replace = history.replaceState;
+  function onRoute() {
+    const p = location.pathname || "";
+    if (/\/[^/]+\/(wiki|pi-chat|ai-chat)(\/|$)/.test(p)) {
+      setTimeout(() => location.reload(), 0);
+    } else {
+      setTimeout(boot, 50);
+    }
+  }
   history.pushState = function () {
     _push.apply(this, arguments);
-    setTimeout(() => location.reload(), 0); // ensure full-page wiki/ai takeovers
+    onRoute();
   };
+  history.replaceState = function () {
+    _replace.apply(this, arguments);
+    onRoute();
+  };
+  window.addEventListener("popstate", onRoute);
 })();

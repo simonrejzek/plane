@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -50,6 +50,11 @@ CHATS: Dict[str, Dict[str, Any]] = {}
 STREAMS: Dict[str, Dict[str, Any]] = {}
 FAVORITES: Dict[str, set] = {}
 
+# Workspace wiki pages (cloud: /api/workspaces/{slug}/pages/) — CE lacks this; PI hosts it.
+WIKI_DATA_DIR = Path(os.environ.get("WIKI_DATA_DIR") or (BASE_DIR / "data" / "wiki"))
+WIKI_DATA_DIR.mkdir(parents=True, exist_ok=True)
+WIKI_PAGES: Dict[str, Dict[str, Dict[str, Any]]] = {}  # slug -> {page_id -> page}
+
 
 def load_json(name: str, default: Any) -> Any:
     path = BASE_DIR / name
@@ -67,6 +72,80 @@ MODELS_SEED = load_json("models.json", {}).get("models") or []
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _wiki_path(slug: str) -> Path:
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (slug or "default"))
+    return WIKI_DATA_DIR / f"{safe}.json"
+
+
+def load_wiki(slug: str) -> Dict[str, Dict[str, Any]]:
+    if slug in WIKI_PAGES:
+        return WIKI_PAGES[slug]
+    path = _wiki_path(slug)
+    pages: Dict[str, Dict[str, Any]] = {}
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text())
+            if isinstance(raw, dict):
+                pages = {k: v for k, v in raw.items() if isinstance(v, dict)}
+            elif isinstance(raw, list):
+                pages = {p["id"]: p for p in raw if isinstance(p, dict) and p.get("id")}
+        except Exception:
+            pages = {}
+    if not pages:
+        # Seed a welcome page like cloud workspaces
+        pid = str(uuid.uuid4())
+        pages[pid] = {
+            "id": pid,
+            "name": "Welcome to Company's Wiki",
+            "owned_by": None,
+            "access": 0,
+            "color": "",
+            "is_favorite": False,
+            "is_locked": False,
+            "archived_at": None,
+            "workspace": None,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "created_by": None,
+            "updated_by": None,
+            "view_props": {"full_width": False},
+            "logo_props": {},
+            "label_ids": [],
+            "anchor": None,
+            "parent_id": None,
+            "collection_id": None,
+            "sub_pages_count": None,
+            "shared_access": None,
+            "is_shared": False,
+            "sort_order": 65535.0,
+            "projects": [],
+            "description": "This is your workspace wiki. Create pages to capture knowledge, processes, and notes — same surface as app.plane.so Wiki.",
+            "description_html": "<p>This is your workspace wiki. Create pages to capture knowledge, processes, and notes — same surface as app.plane.so Wiki.</p>",
+            "description_stripped": "This is your workspace wiki. Create pages to capture knowledge, processes, and notes — same surface as app.plane.so Wiki.",
+        }
+        save_wiki(slug, pages)
+    WIKI_PAGES[slug] = pages
+    return pages
+
+
+def save_wiki(slug: str, pages: Dict[str, Dict[str, Any]]) -> None:
+    WIKI_PAGES[slug] = pages
+    path = _wiki_path(slug)
+    try:
+        path.write_text(json.dumps(pages, indent=2, default=str))
+    except Exception:
+        pass
+
+
+def page_public(page: Dict[str, Any], include_body: bool = False) -> Dict[str, Any]:
+    out = {k: v for k, v in page.items() if k not in ("description", "description_html", "description_stripped") or include_body}
+    if include_body:
+        out["description"] = page.get("description") or ""
+        out["description_html"] = page.get("description_html") or ""
+        out["description_stripped"] = page.get("description_stripped") or page.get("description") or ""
+    return out
 
 
 def user_key(request: Request) -> str:
@@ -294,6 +373,35 @@ async def gather_workspace_context(
     return "\n\n".join(parts)
 
 
+def _extract_title(query: str, default: str = "Untitled") -> str:
+    q = (query or "").lower()
+    title = query or default
+    for sep in ("called ", "titled ", "named ", "title ", ": "):
+        if sep in q:
+            title = query[q.index(sep) + len(sep) :].strip(" .\"'")
+            break
+    # strip leading intent verbs
+    for prefix in (
+        "create work item ",
+        "create issue ",
+        "add issue ",
+        "new issue ",
+        "new work item ",
+        "create wiki page ",
+        "create wiki ",
+        "create page ",
+        "new wiki ",
+        "new page ",
+        "add page ",
+        "update page ",
+        "edit page ",
+        "rename page ",
+    ):
+        if title.lower().startswith(prefix):
+            title = title[len(prefix) :].strip()
+    return (title[:200] or default).strip()
+
+
 async def execute_plane_tools(
     mode: str,
     query: str,
@@ -301,13 +409,80 @@ async def execute_plane_tools(
     cookie: str,
     csrf: str,
 ) -> str:
-    """Agent actions for Build/Autopilot — create work items and wiki pages via Plane API."""
-    if mode not in ("build", "autopilot") or not workspace_slug:
+    """Agent actions for Ask/Build/Autopilot — list, create, edit work items and wiki pages."""
+    if not workspace_slug:
         return ""
     q = (query or "").lower()
     notes: List[str] = []
+    can_mutate = mode in ("build", "autopilot") or any(
+        k in q
+        for k in (
+            "create ",
+            "add ",
+            "new ",
+            "update ",
+            "edit ",
+            "rename ",
+            "delete ",
+            "make ",
+            "write ",
+        )
+    )
 
-    if any(k in q for k in ("create work item", "create issue", "add issue", "new issue", "new work item")):
+    # Always allow read-style tools in any mode
+    if any(
+        k in q
+        for k in (
+            "my work",
+            "assigned to me",
+            "my issues",
+            "my work items",
+            "what am i working",
+            "list issues",
+            "list work items",
+            "show issues",
+            "show work items",
+            "pending",
+            "open work",
+        )
+    ):
+        res = await plane_api(
+            "GET", f"/api/workspaces/{workspace_slug}/user-issues/", cookie, csrf
+        )
+        if res.get("status") != 200:
+            res = await plane_api(
+                "GET", f"/api/users/me/workspaces/{workspace_slug}/issues/", cookie, csrf
+            )
+        notes.append(f"User work items: {json.dumps(res)[:2000]}")
+
+    if any(k in q for k in ("list projects", "show projects", "what projects", "project list")):
+        projects = await plane_api(
+            "GET", f"/api/workspaces/{workspace_slug}/projects/", cookie, csrf
+        )
+        notes.append(f"Projects: {json.dumps(projects)[:2000]}")
+
+    if any(k in q for k in ("list wiki", "list pages", "wiki pages", "show wiki", "what pages")):
+        pages = load_wiki(workspace_slug)
+        summary = [
+            {"id": p.get("id"), "name": p.get("name"), "updated_at": p.get("updated_at")}
+            for p in pages.values()
+        ]
+        notes.append(f"Wiki pages ({len(summary)}): {json.dumps(summary)[:2000]}")
+
+    if can_mutate and any(
+        k in q
+        for k in (
+            "create work item",
+            "create issue",
+            "add issue",
+            "new issue",
+            "new work item",
+            "make a work item",
+            "make an issue",
+            "create a task",
+            "add a task",
+        )
+    ):
         projects = await plane_api(
             "GET", f"/api/workspaces/{workspace_slug}/projects/", cookie, csrf
         )
@@ -326,12 +501,7 @@ async def execute_plane_tools(
                 break
         if not project_id and proj_list:
             project_id = proj_list[0].get("id")
-        title = query
-        for sep in ("called ", "titled ", "named ", ": "):
-            if sep in q:
-                title = query[q.index(sep) + len(sep) :].strip(" .\"'")
-                break
-        title = title[:200] or "New work item"
+        title = _extract_title(query, "New work item")
         if project_id:
             res = await plane_api(
                 "POST",
@@ -340,34 +510,88 @@ async def execute_plane_tools(
                 csrf,
                 {"name": title, "project_id": project_id},
             )
-            notes.append(f"Create work item result: {json.dumps(res)[:800]}")
+            notes.append(f"Create work item result: {json.dumps(res)[:1200]}")
         else:
             notes.append("Could not resolve a project to create the work item in.")
 
-    if any(k in q for k in ("create wiki", "create page", "new wiki", "new page", "add page")):
-        title = "Untitled"
-        for sep in ("called ", "titled ", "named ", ": "):
-            if sep in q:
-                title = query[q.index(sep) + len(sep) :].strip(" .\"'")[:200]
-                break
-        res = await plane_api(
-            "POST",
-            f"/api/workspaces/{workspace_slug}/pages/",
-            cookie,
-            csrf,
-            {"name": title or "Untitled"},
+    if can_mutate and any(
+        k in q
+        for k in (
+            "create wiki",
+            "create page",
+            "new wiki",
+            "new page",
+            "add page",
+            "make a page",
+            "write a page",
+            "add wiki",
         )
-        notes.append(f"Create wiki page result: {json.dumps(res)[:800]}")
+    ):
+        title = _extract_title(query, "Untitled")
+        pages = load_wiki(workspace_slug)
+        pid = str(uuid.uuid4())
+        body = ""
+        if "content:" in q:
+            body = query[q.index("content:") + len("content:") :].strip()
+        page = {
+            "id": pid,
+            "name": title or "Untitled",
+            "owned_by": None,
+            "access": 0,
+            "color": "",
+            "is_favorite": False,
+            "is_locked": False,
+            "archived_at": None,
+            "workspace": None,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "created_by": None,
+            "updated_by": None,
+            "view_props": {"full_width": False},
+            "logo_props": {},
+            "label_ids": [],
+            "anchor": None,
+            "parent_id": None,
+            "collection_id": None,
+            "sub_pages_count": None,
+            "shared_access": None,
+            "is_shared": False,
+            "sort_order": 65535.0,
+            "projects": [],
+            "description": body,
+            "description_html": f"<p>{body}</p>" if body else "",
+            "description_stripped": body,
+        }
+        pages[pid] = page
+        save_wiki(workspace_slug, pages)
+        notes.append(f"Created wiki page id={pid} name={title!r}")
 
-    if any(k in q for k in ("my work", "assigned to me", "my issues", "my work items", "what am i working")):
-        res = await plane_api(
-            "GET", f"/api/workspaces/{workspace_slug}/user-issues/", cookie, csrf
-        )
-        if res.get("status") != 200:
-            res = await plane_api(
-                "GET", f"/api/users/me/workspaces/{workspace_slug}/issues/", cookie, csrf
-            )
-        notes.append(f"User work items: {json.dumps(res)[:1200]}")
+    if can_mutate and any(k in q for k in ("update page", "edit page", "rename page", "update wiki")):
+        pages = load_wiki(workspace_slug)
+        target = None
+        for p in pages.values():
+            name = (p.get("name") or "").lower()
+            if name and name in q:
+                target = p
+                break
+        if not target and pages:
+            # fall back to most recently updated
+            target = sorted(pages.values(), key=lambda x: x.get("updated_at") or "", reverse=True)[0]
+        if target:
+            new_title = _extract_title(query, target.get("name") or "Untitled")
+            if any(k in q for k in ("rename", "title")):
+                target["name"] = new_title
+            if "content:" in q:
+                body = query[q.index("content:") + len("content:") :].strip()
+                target["description"] = body
+                target["description_html"] = f"<p>{body}</p>"
+                target["description_stripped"] = body
+            target["updated_at"] = now_iso()
+            pages[target["id"]] = target
+            save_wiki(workspace_slug, pages)
+            notes.append(f"Updated wiki page id={target['id']} name={target.get('name')!r}")
+        else:
+            notes.append("No wiki page found to update.")
 
     return "\n".join(notes)
 
@@ -436,6 +660,7 @@ def healthz():
 
 
 @app.get("/cosmic-pilot/wiki")
+@app.get("/cosmic-pilot/wiki/")
 def wiki_ui():
     index = STATIC_DIR / "wiki.html"
     if not index.exists():
@@ -444,6 +669,7 @@ def wiki_ui():
 
 
 @app.get("/cosmic-pilot/ui")
+@app.get("/cosmic-pilot/ui/")
 def pilot_ui():
     index = STATIC_DIR / "index.html"
     if not index.exists():
@@ -451,10 +677,187 @@ def pilot_ui():
     return FileResponse(index, media_type="text/html")
 
 
-@app.get("/cosmic-pilot/inject.js")
-def inject_js():
+def _inject_response():
     path = STATIC_DIR / "inject.js"
-    return FileResponse(path, media_type="application/javascript")
+    if not path.exists():
+        return HTMLResponse("// inject missing", status_code=500, media_type="application/javascript")
+    return FileResponse(
+        path,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@app.get("/cosmic-pilot/inject.js")
+@app.get("/cosmic-pilot-inject.js")
+@app.get("/inject.js")
+def inject_js():
+    return _inject_response()
+
+
+# ---------------------------------------------------------------------------
+# Workspace Wiki API — cloud-compatible paths (proxied here from Caddy)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/workspaces/{slug}/pages/")
+def wiki_list_pages(slug: str, cursor: Optional[str] = None, per_page: int = 100):
+    pages = list(load_wiki(slug).values())
+    pages.sort(key=lambda p: p.get("updated_at") or "", reverse=True)
+    results = [page_public(p, include_body=False) for p in pages]
+    return {
+        "grouped_by": None,
+        "sub_grouped_by": None,
+        "total_count": len(results),
+        "next_cursor": None,
+        "prev_cursor": None,
+        "next_page_results": False,
+        "prev_page_results": False,
+        "count": len(results),
+        "total_pages": 1,
+        "total_results": len(results),
+        "total_groups": None,
+        "next_group_offset": None,
+        "sub_total_groups": None,
+        "sub_next_group_offset": None,
+        "extra_stats": None,
+        "results": results,
+    }
+
+
+@app.post("/api/workspaces/{slug}/pages/")
+async def wiki_create_page(slug: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    pages = load_wiki(slug)
+    pid = str(uuid.uuid4())
+    name = (body.get("name") or "Untitled").strip() or "Untitled"
+    description = body.get("description") or ""
+    description_html = body.get("description_html") or (f"<p>{description}</p>" if description else "")
+    page = {
+        "id": pid,
+        "name": name,
+        "owned_by": None,
+        "access": body.get("access", 0),
+        "color": body.get("color") or "",
+        "is_favorite": False,
+        "is_locked": False,
+        "archived_at": None,
+        "workspace": None,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "created_by": None,
+        "updated_by": None,
+        "view_props": body.get("view_props") or {"full_width": False},
+        "logo_props": body.get("logo_props") or {},
+        "label_ids": body.get("label_ids") or [],
+        "anchor": None,
+        "parent_id": body.get("parent_id"),
+        "collection_id": body.get("collection_id"),
+        "sub_pages_count": None,
+        "shared_access": None,
+        "is_shared": False,
+        "sort_order": float(body.get("sort_order") or 65535.0),
+        "projects": body.get("projects") or [],
+        "description": description,
+        "description_html": description_html,
+        "description_stripped": body.get("description_stripped") or description,
+    }
+    pages[pid] = page
+    save_wiki(slug, pages)
+    return page_public(page, include_body=True)
+
+
+@app.get("/api/workspaces/{slug}/pages/{page_id}/")
+def wiki_get_page(slug: str, page_id: str):
+    pages = load_wiki(slug)
+    page = pages.get(page_id)
+    if not page:
+        return JSONResponse({"error": "Page not found."}, status_code=404)
+    return page_public(page, include_body=True)
+
+
+@app.patch("/api/workspaces/{slug}/pages/{page_id}/")
+async def wiki_patch_page(slug: str, page_id: str, request: Request):
+    pages = load_wiki(slug)
+    page = pages.get(page_id)
+    if not page:
+        return JSONResponse({"error": "Page not found."}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    for key in ("name", "access", "color", "view_props", "logo_props", "parent_id", "sort_order", "is_favorite"):
+        if key in body:
+            page[key] = body[key]
+    if "description" in body:
+        page["description"] = body["description"] or ""
+        page["description_stripped"] = body.get("description_stripped") or page["description"]
+    if "description_html" in body:
+        page["description_html"] = body["description_html"] or ""
+        if "description" not in body:
+            # strip tags lightly
+            import re as _re
+
+            page["description"] = _re.sub(r"<[^>]+>", "", page["description_html"] or "")
+            page["description_stripped"] = page["description"]
+    page["updated_at"] = now_iso()
+    pages[page_id] = page
+    save_wiki(slug, pages)
+    return page_public(page, include_body=True)
+
+
+@app.delete("/api/workspaces/{slug}/pages/{page_id}/")
+def wiki_delete_page(slug: str, page_id: str):
+    pages = load_wiki(slug)
+    if page_id in pages:
+        del pages[page_id]
+        save_wiki(slug, pages)
+    return Response(status_code=204)
+
+
+@app.get("/api/workspaces/{slug}/pages/{page_id}/description/")
+def wiki_get_description(slug: str, page_id: str):
+    pages = load_wiki(slug)
+    page = pages.get(page_id)
+    if not page:
+        return JSONResponse({"error": "Page not found."}, status_code=404)
+    return {
+        "description": page.get("description") or "",
+        "description_html": page.get("description_html") or "",
+        "description_stripped": page.get("description_stripped") or page.get("description") or "",
+    }
+
+
+@app.patch("/api/workspaces/{slug}/pages/{page_id}/description/")
+async def wiki_patch_description(slug: str, page_id: str, request: Request):
+    pages = load_wiki(slug)
+    page = pages.get(page_id)
+    if not page:
+        return JSONResponse({"error": "Page not found."}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if "description_html" in body:
+        page["description_html"] = body["description_html"] or ""
+    if "description" in body:
+        page["description"] = body["description"] or ""
+    elif "description_html" in body:
+        import re as _re
+
+        page["description"] = _re.sub(r"<[^>]+>", "", page["description_html"] or "")
+    page["description_stripped"] = body.get("description_stripped") or page.get("description") or ""
+    page["updated_at"] = now_iso()
+    pages[page_id] = page
+    save_wiki(slug, pages)
+    return {
+        "description": page.get("description") or "",
+        "description_html": page.get("description_html") or "",
+        "description_stripped": page.get("description_stripped") or "",
+    }
 
 
 # ---------------------------------------------------------------------------
