@@ -122,6 +122,20 @@
 	}
 	reverse_proxy @proj_issues_meta pi:8080
 
+	# Project issues total-count (must be before list matcher)
+	@proj_issues_tc {
+		method GET
+		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/issues/total-count/?$
+	}
+	reverse_proxy @proj_issues_tc pi:8080
+
+	# Project issues LIST only — NOT /issues/{id}/ (detail stays on CE)
+	@proj_issues_list {
+		method GET
+		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/issues/?$
+	}
+	reverse_proxy @proj_issues_list pi:8080
+
 	@proj_work_items {
 		method GET
 		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/work-items/?$
@@ -149,17 +163,15 @@
 	@ws_user_profile path_regexp ^/api/workspaces/[^/]+/user-profile/
 	reverse_proxy @ws_user_profile pi:8080
 
+	# Commercial My Work total-count path (CE only has /user-issues/)
+	@ws_user_work_items path_regexp ^/api/workspaces/[^/]+/user-work-items/
+	reverse_proxy @ws_user_work_items pi:8080
+
 	@ws_export path_regexp ^/api/workspaces/[^/]+/(export-issues|exporters)/?
 	reverse_proxy @ws_export pi:8080
 
 	@proj_export path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/(export-issues|issue-exports)/?
 	reverse_proxy @proj_export pi:8080
-
-	@proj_issues_tc {
-		method GET
-		path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/issues/total-count/?$
-	}
-	reverse_proxy @proj_issues_tc pi:8080
 
 	@proj_modules_lite {
 		method GET

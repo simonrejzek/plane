@@ -191,3 +191,103 @@ def test_project_features_time_tracking_modules():
 def test_grants_data_loaded():
     assert "owner" in GRANTS_BY_RELATION
     assert len(GRANTS_BY_RELATION["owner"]["permission_grants"]) >= 300
+
+
+def test_clean_and_normalize_issue_helpers():
+    from commercial_compat import (
+        clean_ce_issue_params,
+        normalize_issues_list_response,
+        total_count_from_issues_body,
+    )
+
+    q = clean_ce_issue_params(
+        {
+            "group_by": "state",
+            "layout": "kanban",
+            "sidecar": "1",
+            "skip_total_count": "1",
+            "filters": "{}",
+            "per_page": "30",
+        }
+    )
+    assert q["group_by"] == "state_id"
+    assert "layout" not in q and "sidecar" not in q and "filters" not in q
+
+    body = {
+        "results": {
+            "s1": {"results": [{"id": "i1", "state_id": "s1"}], "total_results": 2},
+        },
+        "total_count": 2,
+    }
+    n = normalize_issues_list_response(body)
+    assert n["referenced_resources"] == {}
+    assert n["results"]["s1"]["results"][0]["id"] == "i1"
+    tc = total_count_from_issues_body(n)
+    assert tc["total_count"] == 2
+    assert tc["counts"]["s1"] == 2
+
+
+def test_project_issues_list_normalizes_grouped_response():
+    app = make_app()
+
+    async def mock_ce(path, request, params=None):
+        if "workspace-members/me" in path:
+            return 200, {"id": "m1", "role": 20, "is_active": True}, {}
+        if path == "/api/users/me/":
+            return 200, {"id": "u1"}, {}
+        if path == "/api/users/me/workspaces/":
+            return 200, [{"id": "w1", "slug": "cosmicboosts", "role": 20}], {}
+        if path.endswith("/issues/") and "total-count" not in path:
+            # ensure commercial params were stripped before CE
+            assert params is None or "layout" not in (params or {})
+            assert params is None or (params or {}).get("group_by") in (None, "state_id")
+            return (
+                200,
+                {
+                    "results": {
+                        "state-1": {
+                            "results": [{"id": "issue-1", "name": "A", "state_id": "state-1"}],
+                            "total_results": 1,
+                        }
+                    },
+                    "total_count": 1,
+                    "total_results": 1,
+                },
+                {},
+            )
+        if path.endswith("/modules/"):
+            return 200, [], {}
+        return 404, {"error": "not mocked"}, {}
+
+    with patch("commercial_compat.ce_get", new=AsyncMock(side_effect=mock_ce)):
+        c = TestClient(app)
+        r = c.get(
+            "/api/workspaces/cosmicboosts/projects/proj1/issues/",
+            params={"group_by": "state", "layout": "kanban", "sidecar": "1"},
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total_count"] == 1
+    assert "referenced_resources" in data
+    assert data["results"]["state-1"]["results"][0]["id"] == "issue-1"
+
+
+def test_user_work_items_total_count_aliases_user_issues():
+    app = make_app()
+
+    async def mock_ce(path, request, params=None):
+        if "workspace-members/me" in path:
+            return 200, {"id": "m1", "role": 20, "is_active": True}, {}
+        if path == "/api/users/me/":
+            return 200, {"id": "u1"}, {}
+        if path == "/api/users/me/workspaces/":
+            return 200, [{"id": "w1", "slug": "cosmicboosts", "role": 20}], {}
+        if "/user-issues/" in path:
+            return 200, {"results": [{"id": "i1"}], "total_count": 7, "total_results": 7}, {}
+        return 404, {"error": "not mocked"}, {}
+
+    with patch("commercial_compat.ce_get", new=AsyncMock(side_effect=mock_ce)):
+        c = TestClient(app)
+        r = c.get("/api/workspaces/cosmicboosts/user-work-items/user-1/total-count/")
+    assert r.status_code == 200
+    assert r.json()["total_count"] == 7

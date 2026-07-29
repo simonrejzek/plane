@@ -277,6 +277,254 @@ def as_page(items: Any, total: Optional[int] = None) -> Dict[str, Any]:
         "sub_grouped_by": None,
     }
 
+
+# Commercial SPA display group_by keys → CE ISSUE_GROUP_BY_ALLOWLIST field names.
+# (EIssueGroupByToServerOptions in @plane/constants)
+GROUP_BY_CLIENT_TO_CE: Dict[str, str] = {
+    "state": "state_id",
+    "priority": "priority",
+    "labels": "labels__id",
+    "state_detail.group": "state__group",
+    "assignees": "assignees__id",
+    "cycle": "cycle_id",
+    "module": "issue_module__module_id",
+    "target_date": "target_date",
+    "project": "project_id",
+    "team_project": "project_id",
+    "created_by": "created_by",
+    # already-server forms (pass-through)
+    "state_id": "state_id",
+    "labels__id": "labels__id",
+    "state__group": "state__group",
+    "assignees__id": "assignees__id",
+    "cycle_id": "cycle_id",
+    "issue_module__module_id": "issue_module__module_id",
+    "project_id": "project_id",
+}
+
+# Params commercial SPA always attaches that CE either ignores or mishandles.
+_COMMERCIAL_ONLY_ISSUE_PARAMS = frozenset(
+    {
+        "layout",
+        "sidecar",
+        "skip_total_count",
+        "group_offset",
+        "group_per_page",
+        "sub_group_offset",
+        "sub_group_per_page",
+    }
+)
+
+
+def clean_ce_issue_params(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Strip commercial-only query keys and map group_by/sub_group_by for CE."""
+    if not raw:
+        return {}
+    out: Dict[str, Any] = {}
+    for k, v in raw.items():
+        if k in _COMMERCIAL_ONLY_ISSUE_PARAMS:
+            continue
+        if v is None:
+            continue
+        # Drop empty JSON filters object — CE ComplexFilterBackend treats {} as no-op,
+        # but some CE versions validate structure aggressively.
+        if k == "filters":
+            s = str(v).strip()
+            if s in ("", "{}", "null", "None"):
+                continue
+        out[k] = v
+
+    for key in ("group_by", "sub_group_by"):
+        if key not in out:
+            continue
+        mapped = GROUP_BY_CLIENT_TO_CE.get(str(out[key]), str(out[key]))
+        # CE allowlist rejection → drop invalid values rather than 400 the board
+        if mapped in GROUP_BY_CLIENT_TO_CE.values() or mapped in (
+            "state_id",
+            "state__group",
+            "priority",
+            "labels__id",
+            "assignees__id",
+            "issue_module__module_id",
+            "cycle_id",
+            "project_id",
+            "created_by",
+            "target_date",
+            "start_date",
+        ):
+            out[key] = mapped
+        else:
+            out.pop(key, None)
+    return out
+
+
+def _normalize_issue_item(issue: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure commercial board fields exist with CE-compatible aliases."""
+    out = dict(issue)
+    # ids always strings for SPA Map keys
+    if out.get("id") is not None:
+        out["id"] = str(out["id"])
+    if out.get("project_id") is not None:
+        out["project_id"] = str(out["project_id"])
+    if out.get("state_id") is not None:
+        out["state_id"] = str(out["state_id"])
+    elif out.get("state") is not None and not isinstance(out.get("state"), dict):
+        out["state_id"] = str(out["state"])
+
+    # assignee_ids / label_ids arrays as string uuids
+    for arr_key in ("assignee_ids", "label_ids", "module_ids"):
+        arr = out.get(arr_key)
+        if isinstance(arr, list):
+            out[arr_key] = [str(x) for x in arr if x is not None]
+        elif arr is None:
+            out[arr_key] = []
+
+    # Commercial sometimes reads assignees as id list
+    if "assignees" not in out and out.get("assignee_ids"):
+        out["assignees"] = list(out["assignee_ids"])
+    if "labels" not in out and out.get("label_ids"):
+        out["labels"] = list(out["label_ids"])
+
+    return out
+
+
+def _normalize_group_bucket(bucket: Any) -> Dict[str, Any]:
+    """processIssueResponse expects {results: Issue[], total_results: number}."""
+    if isinstance(bucket, list):
+        items = [_normalize_issue_item(x) if isinstance(x, dict) else x for x in bucket]
+        return {"results": items, "total_results": len(items)}
+    if not isinstance(bucket, dict):
+        return {"results": [], "total_results": 0}
+    results = bucket.get("results")
+    if isinstance(results, list):
+        items = [_normalize_issue_item(x) if isinstance(x, dict) else x for x in results]
+        total = bucket.get("total_results")
+        if total is None:
+            total = bucket.get("total_count")
+        if total is None:
+            total = len(items)
+        out = dict(bucket)
+        out["results"] = items
+        out["total_results"] = int(total) if total is not None else len(items)
+        return out
+    if isinstance(results, dict):
+        # sub-grouped
+        out = dict(bucket)
+        norm_sub: Dict[str, Any] = {}
+        for sk, sv in results.items():
+            norm_sub[str(sk)] = _normalize_group_bucket(sv)
+        out["results"] = norm_sub
+        if out.get("total_results") is None:
+            out["total_results"] = sum(
+                int(b.get("total_results") or 0) for b in norm_sub.values() if isinstance(b, dict)
+            )
+        return out
+    return {"results": [], "total_results": int(bucket.get("total_results") or 0)}
+
+
+def normalize_issues_list_response(body: Any) -> Dict[str, Any]:
+    """Shape CE issues list for commercial processIssueResponse + referenced_resources."""
+    if isinstance(body, list):
+        items = [_normalize_issue_item(x) if isinstance(x, dict) else x for x in body]
+        return {
+            "results": items,
+            "total_count": len(items),
+            "total_results": len(items),
+            "count": len(items),
+            "next_cursor": None,
+            "prev_cursor": None,
+            "next_page_results": False,
+            "prev_page_results": False,
+            "grouped_by": None,
+            "sub_grouped_by": None,
+            "extra_stats": None,
+            "referenced_resources": {},
+            "total_groups": None,
+            "next_group_offset": None,
+        }
+
+    if not isinstance(body, dict):
+        return {
+            "results": [],
+            "total_count": 0,
+            "total_results": 0,
+            "count": 0,
+            "next_cursor": None,
+            "prev_cursor": None,
+            "next_page_results": False,
+            "prev_page_results": False,
+            "grouped_by": None,
+            "sub_grouped_by": None,
+            "extra_stats": None,
+            "referenced_resources": {},
+        }
+
+    out = dict(body)
+    results = out.get("results")
+
+    if isinstance(results, list):
+        out["results"] = [_normalize_issue_item(x) if isinstance(x, dict) else x for x in results]
+    elif isinstance(results, dict):
+        norm: Dict[str, Any] = {}
+        for gid, bucket in results.items():
+            norm[str(gid)] = _normalize_group_bucket(bucket)
+        out["results"] = norm
+        # Ensure every group key is a string (SPA uses string state ids)
+    elif results is None:
+        out["results"] = []
+
+    # total_count required by processIssueResponse for ALL_ISSUES
+    if out.get("total_count") is None:
+        out["total_count"] = out.get("total_results") or out.get("count") or 0
+    try:
+        out["total_count"] = int(out["total_count"])
+    except Exception:
+        out["total_count"] = 0
+
+    if out.get("total_results") is None:
+        out["total_results"] = out["total_count"]
+
+    # Commercial SPA optional fields — never throw on missing
+    if "referenced_resources" not in out or out["referenced_resources"] is None:
+        out["referenced_resources"] = {}
+    if "total_groups" not in out:
+        out["total_groups"] = None
+    if "next_group_offset" not in out:
+        out["next_group_offset"] = None
+    if "sub_total_groups" not in out:
+        out["sub_total_groups"] = None
+    if "sub_next_group_offset" not in out:
+        out["sub_next_group_offset"] = None
+
+    return out
+
+
+def total_count_from_issues_body(body: Any) -> Dict[str, Any]:
+    """Build commercial getWorkItemTotalCount payload from a CE issues list body."""
+    if not isinstance(body, dict):
+        return {"total_count": 0, "grouped_count": {}, "counts": {}}
+    results = body.get("results")
+    counts: Dict[str, int] = {}
+    if isinstance(results, dict):
+        for gid, bucket in results.items():
+            if isinstance(bucket, dict):
+                counts[str(gid)] = int(
+                    bucket.get("total_results")
+                    or bucket.get("total_count")
+                    or len(bucket.get("results") or [])
+                    or 0
+                )
+            elif isinstance(bucket, list):
+                counts[str(gid)] = len(bucket)
+    total = body.get("total_count") or body.get("total_results") or body.get("count")
+    if total is None:
+        total = sum(counts.values()) if counts else 0
+    try:
+        total_i = int(total)
+    except Exception:
+        total_i = 0
+    return {"total_count": total_i, "grouped_count": counts, "counts": counts}
+
 def enrich_workspace(ws: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(ws)
     role = out.get("role")
@@ -635,40 +883,124 @@ def register_commercial_compat(app: FastAPI) -> None:
         return as_page(body)
 
     @app.get("/api/workspaces/{slug}/projects/{project_id}/issues/total-count/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/issues/total-count")
     async def issues_total_count(slug: str, project_id: str, request: Request):
-        """Commercial kanban calls this; synthesize from CE issues total_count."""
+        """Commercial kanban getWorkItemTotalCount — synthesize from CE issues list."""
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        # try CE issues list with same query params minus layout-only fields
-        q = dict(request.query_params)
-        # fetch a grouped issues page to get totals when possible
+        q = clean_ce_issue_params(dict(request.query_params))
+        # Prefer a tiny page just for totals
+        q.setdefault("per_page", "1")
+        q.setdefault("cursor", "1:0:0")
         status, body, _ = await ce_get(
             f"/api/workspaces/{slug}/projects/{project_id}/issues/",
             request,
             params=q or None,
         )
-        if status == 200 and isinstance(body, dict):
-            # group counts if results are dict of buckets
-            results = body.get("results")
-            if isinstance(results, dict):
-                counts = {}
-                for gid, bucket in results.items():
-                    if isinstance(bucket, dict):
-                        counts[gid] = bucket.get("total_results") or len(bucket.get("results") or [])
-                    elif isinstance(bucket, list):
-                        counts[gid] = len(bucket)
-                return {
-                    "total_count": body.get("total_count") or body.get("total_results") or sum(counts.values()),
-                    "grouped_count": counts,
-                    "counts": counts,
-                }
-            return {
-                "total_count": body.get("total_count") or body.get("total_results") or 0,
-                "grouped_count": {},
-                "counts": {},
-            }
+        if status == 200:
+            return total_count_from_issues_body(normalize_issues_list_response(body))
+        if status in (401, 403):
+            return JSONResponse(
+                body if isinstance(body, (dict, list)) else {"detail": str(body)},
+                status_code=status,
+            )
         return {"total_count": 0, "grouped_count": {}, "counts": {}}
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/issues/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/issues")
+    async def project_issues_list(slug: str, project_id: str, request: Request):
+        """Proxy commercial kanban/list board load through PI.
+
+        Cleans commercial-only query params, maps group_by aliases to CE allowlist,
+        and normalizes the response for processIssueResponse.
+        """
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        q = clean_ce_issue_params(dict(request.query_params))
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/issues/",
+            request,
+            params=q or None,
+        )
+        if status != 200:
+            return JSONResponse(
+                body if isinstance(body, (dict, list)) else {"error": str(body)},
+                status_code=status,
+            )
+        out = normalize_issues_list_response(body)
+        # Enrich module names so board cards don't flash UUIDs
+        try:
+            mod_map = await _module_name_map(slug, project_id, request)
+            if mod_map:
+                results = out.get("results")
+                if isinstance(results, list):
+                    out["results"] = [
+                        _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x for x in results
+                    ]
+                elif isinstance(results, dict):
+                    for k, bucket in list(results.items()):
+                        if isinstance(bucket, dict) and isinstance(bucket.get("results"), list):
+                            bucket["results"] = [
+                                _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x
+                                for x in bucket["results"]
+                            ]
+                        elif isinstance(bucket, list):
+                            results[k] = [
+                                _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x for x in bucket
+                            ]
+        except Exception:
+            pass
+        return out
+
+    @app.get("/api/workspaces/{slug}/user-work-items/{user_id}/total-count/")
+    @app.get("/api/workspaces/{slug}/user-work-items/{user_id}/total-count")
+    async def user_work_items_total_count(slug: str, user_id: str, request: Request):
+        """Commercial My Work: getUserProfileWorkItemTotalCount.
+
+        SPA calls user-work-items/{id}/total-count/ but CE only has user-issues/{id}/.
+        """
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        q = clean_ce_issue_params(dict(request.query_params))
+        q.setdefault("per_page", "1")
+        q.setdefault("cursor", "1:0:0")
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/user-issues/{user_id}/",
+            request,
+            params=q or None,
+        )
+        if status == 200:
+            return total_count_from_issues_body(normalize_issues_list_response(body))
+        if status in (401, 403):
+            return JSONResponse(
+                body if isinstance(body, (dict, list)) else {"detail": str(body)},
+                status_code=status,
+            )
+        # Soft-fail so My Work doesn't spin forever
+        return {"total_count": 0, "grouped_count": {}, "counts": {}}
+
+    @app.get("/api/workspaces/{slug}/user-work-items/{user_id}/")
+    @app.get("/api/workspaces/{slug}/user-work-items/{user_id}")
+    async def user_work_items_list(slug: str, user_id: str, request: Request):
+        """Alias commercial user-work-items list → CE user-issues (normalized)."""
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        q = clean_ce_issue_params(dict(request.query_params))
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/user-issues/{user_id}/",
+            request,
+            params=q or None,
+        )
+        if status != 200:
+            return JSONResponse(
+                body if isinstance(body, (dict, list)) else {"error": str(body)},
+                status_code=status,
+            )
+        return normalize_issues_list_response(body)
 
     def _module_rows_from_body(body: Any) -> List[Dict[str, Any]]:
         if isinstance(body, list):
@@ -1214,15 +1546,19 @@ def register_commercial_compat(app: FastAPI) -> None:
 
 
     @app.get("/api/workspaces/{slug}/projects/{project_id}/issues/meta/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/issues/meta")
     async def issues_meta(slug: str, project_id: str, request: Request):
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         # Prefer real counts from CE issues list so commercial board isn't empty
+        q = clean_ce_issue_params(dict(request.query_params))
+        q["per_page"] = "1"
+        q.setdefault("cursor", "1:0:0")
         status, body, _ = await ce_get(
             f"/api/workspaces/{slug}/projects/{project_id}/issues/",
             request,
-            params={"per_page": "1"},
+            params=q or None,
         )
         total = 0
         if status == 200 and isinstance(body, dict):
@@ -1414,41 +1750,11 @@ def register_commercial_compat(app: FastAPI) -> None:
         return issue
 
     @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items")
     async def work_items_alias(slug: str, project_id: str, request: Request):
-        """Alias commercial work-items list to CE issues, preserving query string."""
-        err_status, role, err_body = await resolve_membership(slug, request)
-        if err_status is not None:
-            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        q = str(request.url.query or "")
-        path = f"/api/workspaces/{slug}/projects/{project_id}/issues/"
-        if q:
-            path = f"{path}?{q}"
-        status, body, _ = await ce_get(path, request)
-        if status != 200:
-            return JSONResponse(body if isinstance(body, (dict, list)) else {"error": str(body)}, status_code=status)
-        # Enrich module names so board/list doesn't flash UUIDs
-        try:
-            mod_map = await _module_name_map(slug, project_id, request)
-            if mod_map and isinstance(body, dict):
-                results = body.get("results")
-                if isinstance(results, list):
-                    body["results"] = [
-                        _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x for x in results
-                    ]
-                elif isinstance(results, dict):
-                    for k, bucket in list(results.items()):
-                        if isinstance(bucket, dict) and isinstance(bucket.get("results"), list):
-                            bucket["results"] = [
-                                _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x
-                                for x in bucket["results"]
-                            ]
-                        elif isinstance(bucket, list):
-                            results[k] = [
-                                _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x for x in bucket
-                            ]
-        except Exception:
-            pass
-        return body
+        """Alias commercial work-items list to CE issues (same normalizer as issues list)."""
+        # Reuse the board list proxy so spreadsheet/layout paths stay in sync
+        return await project_issues_list(slug, project_id, request)
 
 
     # ---- Commercial SPA work-item path aliases → CE issues API ----
