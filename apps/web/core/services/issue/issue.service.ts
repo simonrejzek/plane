@@ -442,18 +442,35 @@ export class IssueService extends APIService {
     issue_sequence: string,
     queries?: any
   ): Promise<TIssue> {
-    return this.get(`/api/workspaces/${workspaceSlug}/work-items/${project_identifier}-${issue_sequence}/`, {
-      params: queries,
-    })
-      .then(async (response) => {
-        // add is_epic flag when the service type is epic
-        if (response.data && this.serviceType === EIssueServiceType.EPICS) {
-          response.data.is_epic = true;
-        }
-        return response?.data;
-      })
-      .catch((error) => {
-        throw error?.response?.data;
-      });
+    const applyEpicFlag = (data: TIssue | undefined) => {
+      if (data && this.serviceType === EIssueServiceType.EPICS) {
+        data.is_epic = true;
+      }
+      return data;
+    };
+
+    // Prefer work-items path (Plane 1.3+); fall back to legacy identifier endpoints if missing.
+    try {
+      const response = await this.get(
+        `/api/workspaces/${workspaceSlug}/work-items/${project_identifier}-${issue_sequence}/`,
+        { params: queries }
+      );
+      return applyEpicFlag(response?.data);
+    } catch (error: any) {
+      const status = error?.response?.status;
+      if (status !== 404 && status !== 405) {
+        throw error?.response?.data ?? error;
+      }
+    }
+
+    try {
+      const response = await this.get(
+        `/api/workspaces/${workspaceSlug}/projects/${project_identifier}/issues/${issue_sequence}/`,
+        { params: queries }
+      );
+      return applyEpicFlag(response?.data);
+    } catch (error: any) {
+      throw error?.response?.data ?? error;
+    }
   }
 }
