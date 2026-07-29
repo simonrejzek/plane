@@ -646,14 +646,22 @@ def register_commercial_compat(app: FastAPI) -> None:
         return {"count": total, "total_count": total, "results": []}
 
     def _normalize_state_lite(r: Dict[str, Any], project_id: Any = None) -> Dict[str, Any]:
+        is_default = bool(r.get("default") if r.get("default") is not None else r.get("is_default"))
         return {
             "id": r.get("id"),
             "name": r.get("name"),
             "color": r.get("color") or "#60646C",
             "group": r.get("group") or r.get("group_key") or "backlog",
             "sequence": r.get("sequence"),
+            "order": r.get("order") if r.get("order") is not None else r.get("sequence"),
             "project_id": r.get("project_id") or r.get("project") or project_id,
-            "default": bool(r.get("default")),
+            "workspace_id": r.get("workspace_id") or r.get("workspace"),
+            # CE uses "default"; commercial SPA reads is_default in several places
+            "default": is_default,
+            "is_default": is_default,
+            "allow_issue_creation": bool(
+                r.get("allow_issue_creation") if r.get("allow_issue_creation") is not None else True
+            ),
             "description": r.get("description") or "",
         }
 
