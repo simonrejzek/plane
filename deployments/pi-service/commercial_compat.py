@@ -830,8 +830,8 @@ def register_commercial_compat(app: FastAPI) -> None:
             )
         out = dict(body)
         inst = dict(out.get("instance") or {})
-        # Mobile / cloud apps gate on current_version (target: 3.0.0 family)
-        spoof = os.environ.get("PLANE_SPOOF_VERSION") or "3.0.0"
+        # Mobile app gate: advertise self-host CE-compatible version (user: 2.3.1)
+        spoof = os.environ.get("PLANE_SPOOF_VERSION") or "2.3.1"
         inst["current_version"] = spoof
         inst["latest_version"] = spoof
         inst["edition"] = inst.get("edition") or "PLANE_BUSINESS"
@@ -843,6 +843,8 @@ def register_commercial_compat(app: FastAPI) -> None:
         # Keep magic off unless SMTP works — avoid empty "continue" into magic code
         cfg.setdefault("is_magic_login_enabled", False)
         cfg.setdefault("enable_turnstile", False)
+        cfg["app_base_url"] = cfg.get("app_base_url") or f"https://{os.environ.get('APP_DOMAIN', 'plane.cosmicboosts.store')}"
+        cfg["space_base_url"] = cfg.get("space_base_url") or cfg["app_base_url"]
         out["config"] = cfg
         return out
 
