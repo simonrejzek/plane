@@ -1,4 +1,17 @@
-:root {
+/* Theme tokens — light by default so a blank shell is never a dark grey void */
+:root,
+html[data-theme="light"] {
+  --bg: #f4f5f6;
+  --panel: #ffffff;
+  --border: #e2e4e8;
+  --text: #1a1d21;
+  --muted: #6b7280;
+  --accent: #3b82f6;
+  --danger: #ef4444;
+  --hover: #eef0f3;
+  color-scheme: light;
+}
+html[data-theme="dark"] {
   --bg: #0e0f10;
   --panel: #15171a;
   --border: #2a2d31;
@@ -7,9 +20,17 @@
   --accent: #3b82f6;
   --danger: #ef4444;
   --hover: #1c1f24;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; }
+html, body {
+  margin: 0;
+  height: 100%;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, system-ui, sans-serif;
+}
 #wiki-app { display: flex; height: 100vh; }
 .wiki-sidebar {
   width: 280px; min-width: 240px; border-right: 1px solid var(--border);

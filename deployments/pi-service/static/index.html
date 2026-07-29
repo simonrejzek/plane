@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -15,7 +15,30 @@
         try {
           var qs = new URLSearchParams(location.search);
           if (qs.get("embed") === "1") document.documentElement.classList.add("embed");
-        } catch (e) {}
+          // Match host SPA theme when embedded; else system preference (never force dark void).
+          var host = null;
+          try {
+            host =
+              window.parent && window.parent !== window
+                ? window.parent.document.documentElement.getAttribute("data-theme")
+                : null;
+          } catch (_) {}
+          var stored = null;
+          try {
+            stored = localStorage.getItem("theme");
+          } catch (_) {}
+          var t = host || stored || "system";
+          if (t === "custom") t = "system";
+          t = String(t).replace(/-custom$/, "");
+          if (t === "system") {
+            t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          t = String(t).indexOf("dark") === -1 ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme", t);
+          document.documentElement.style.colorScheme = t;
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
       })();
     </script>
   </head>

@@ -1,11 +1,38 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Wiki · Plane</title>
     <link rel="stylesheet" href="/cosmic-pilot/static/wiki.css" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script>
+      (function () {
+        try {
+          // Match host SPA theme when embedded; otherwise system preference.
+          var host = null;
+          try {
+            host = window.parent && window.parent !== window ? window.parent.document.documentElement.getAttribute("data-theme") : null;
+          } catch (_) {}
+          var stored = null;
+          try {
+            stored = localStorage.getItem("theme");
+          } catch (_) {}
+          var t = host || stored || "system";
+          if (t === "custom") t = "system";
+          t = String(t).replace(/-custom$/, "");
+          if (t === "system") {
+            t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          if (String(t).indexOf("dark") === -1) t = "light";
+          else t = "dark";
+          document.documentElement.setAttribute("data-theme", t);
+          document.documentElement.style.colorScheme = t;
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="wiki-app">
