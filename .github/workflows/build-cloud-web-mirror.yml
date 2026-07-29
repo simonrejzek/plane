@@ -44,7 +44,7 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v6b
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v7
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v6
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
 
@@ -62,13 +62,19 @@ jobs:
           test -f public/epic-migration/step-3.webp
           test -s public/epic-migration/step-1.gif
           grep -q "manifest-V6i18n" public/index.html
+          test -f public/assets/modules-dark-Bs9zHyrm.webp
+          test -f public/assets/unauthorized-C8vOPqGE.svg
+          test -f public/tips/download-app/download-app-light.webp
+          # At least 100 static media files shipped (empty-state illustrations)
+          media_count=$(find public/assets -maxdepth 1 \( -name '*.webp' -o -name '*.png' -o -name '*.svg' -o -name '*.gif' \) | wc -l | tr -d ' ')
+          test "$media_count" -ge 100
 
       - name: Mirror to ttl.sh
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v6b
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v6b ttl.sh/cosmicboosts-plane-web:cloud-mirror-v6b
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v6b ttl.sh/cosmicboosts-plane-web:cloud-mirror-v6
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v6b
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v7
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v7 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v7
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v7 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v6
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v7
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v6
