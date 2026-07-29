@@ -25,13 +25,13 @@ jobs:
           context: deployments/cosmic-proxy
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/plane-proxy:pi-v6
-            ghcr.io/${{ github.repository_owner }}/plane-proxy:commercial-compat-v1
+            ghcr.io/${{ github.repository_owner }}/plane-proxy:pi-v7
+            ghcr.io/${{ github.repository_owner }}/plane-proxy:commercial-compat-v2
       - name: ttl.sh
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-proxy:pi-v6
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-proxy:pi-v6 ttl.sh/cosmicboosts-plane-proxy:pi-v6
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-proxy:pi-v6 ttl.sh/cosmicboosts-plane-proxy:commercial-compat-v1
-          docker push ttl.sh/cosmicboosts-plane-proxy:pi-v6
-          docker push ttl.sh/cosmicboosts-plane-proxy:commercial-compat-v1
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-proxy:pi-v7
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-proxy:pi-v7 ttl.sh/cosmicboosts-plane-proxy:pi-v7
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-proxy:pi-v7 ttl.sh/cosmicboosts-plane-proxy:commercial-compat-v2
+          docker push ttl.sh/cosmicboosts-plane-proxy:pi-v7
+          docker push ttl.sh/cosmicboosts-plane-proxy:commercial-compat-v2

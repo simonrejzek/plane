@@ -1,24 +1,21 @@
 """
 Commercial app.plane.so SPA ↔ Plane CE API compatibility.
 
-The mirrored Business web UI calls cloud-only endpoints (permissions, plan,
-feature flags, roles). CE does not implement those. Without them the SPA
-renders "Workspace not found" for every workspace URL.
-
-This module synthesizes those responses from CE membership/role data and
-static Business plan/flag payloads. It never mutates the Plane database.
+Synthesizes Business-only endpoints CE lacks. Never mutates Postgres.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PLANE_API_BASE = (os.environ.get("PLANE_API_BASE") or "http://api:8000").rstrip("/")
@@ -41,13 +38,6 @@ OWNER_PERMISSIONS: Dict[str, Any] = _load(
 )
 BUSINESS_FLAGS: Dict[str, Any] = _load("business_flags.json", {"values": {}})
 WORKSPACE_ROLES: List[Dict[str, Any]] = _load("workspace_roles.json", [])
-
-# CE role integers (EUserWorkspaceRoles)
-ROLE_MAP = {
-    20: "owner",  # CE admin / owner-equivalent
-    15: "member",
-    5: "guest",
-}
 
 SELFHOST_PLAN = {
     "is_cancelled": False,
@@ -85,23 +75,22 @@ def _forward_headers(request: Request) -> Dict[str, str]:
         val = request.headers.get(key)
         if val:
             headers[key] = val
-    # CSRF often expects header when cookie present
     csrf = request.cookies.get("csrftoken")
     if csrf and "x-csrftoken" not in {k.lower() for k in headers}:
         headers["X-CSRFToken"] = csrf
     return headers
 
 
-async def ce_get(path: str, request: Request) -> Tuple[int, Any, Dict[str, str]]:
+async def ce_get(path: str, request: Request, params: Optional[Dict[str, Any]] = None) -> Tuple[int, Any, Dict[str, str]]:
     url = f"{PLANE_API_BASE}{path}"
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+    if params:
+        url = f"{url}?{urlencode(params, doseq=True)}"
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         r = await client.get(url, headers=_forward_headers(request))
-    body: Any
     try:
         body = r.json()
     except Exception:
         body = r.text
-    # pass through set-cookie rarely needed for GET
     return r.status_code, body, dict(r.headers)
 
 
@@ -122,13 +111,15 @@ def permissions_payload(relation: str) -> Dict[str, Any]:
             "relation": packed.get("relation") or relation,
             "permission_grants": list(packed["permission_grants"]),
         }
-    # fallback: full owner grants for admin-like, minimal otherwise
     if relation in ("owner", "admin"):
         return {
             "relation": relation,
             "permission_grants": list(OWNER_PERMISSIONS.get("permission_grants") or []),
         }
-    return {"relation": relation, "permission_grants": list(OWNER_PERMISSIONS.get("permission_grants") or [])}
+    return {
+        "relation": relation,
+        "permission_grants": list(OWNER_PERMISSIONS.get("permission_grants") or []),
+    }
 
 
 def features_payload(workspace_id: Optional[str] = None) -> Dict[str, Any]:
@@ -164,23 +155,96 @@ def enrich_workspace(ws: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         role_i = None
     relation = relation_for_ce_role(role_i)
-    # commercial store expects role_slug + plan chrome
-    out.setdefault("role_slug", relation if relation != "owner" else "owner")
     if role_i is not None and role_i >= 20:
         out["role_slug"] = "owner"
+    else:
+        out.setdefault("role_slug", relation)
     out.setdefault("current_plan", "BUSINESS")
     out.setdefault("is_on_trial", False)
     return out
 
 
+def project_role_relation(member_role: Any) -> str:
+    try:
+        r = int(member_role)
+    except Exception:
+        r = 15
+    if r >= 20:
+        return "admin"
+    if r >= 15:
+        return "member"
+    return "guest"
+
+
+def to_project_lite(p: Dict[str, Any]) -> Dict[str, Any]:
+    """Map CE project row → commercial projects-lite shape."""
+    role = p.get("member_role")
+    relation = project_role_relation(role)
+    perms = permissions_payload("owner" if relation == "admin" else relation)
+    # project relation uses admin/member/guest not owner
+    if relation == "admin":
+        perms = permissions_payload("admin") if GRANTS_BY_RELATION.get("admin") else permissions_payload("owner")
+        perms = {**perms, "relation": "admin"}
+    else:
+        perms = {**permissions_payload(relation), "relation": relation}
+
+    return {
+        "id": p.get("id"),
+        "name": p.get("name"),
+        "identifier": p.get("identifier"),
+        "sort_order": p.get("sort_order"),
+        "logo_props": p.get("logo_props"),
+        "member_role": role if role is not None else 20,
+        "intake_count": p.get("intake_count") or 0,
+        "is_favorite": bool(p.get("is_favorite", False)),
+        "archived_at": p.get("archived_at"),
+        "workspace": p.get("workspace"),
+        "cycle_view": bool(p.get("cycle_view", True)),
+        "issue_views_view": bool(p.get("issue_views_view", True)),
+        "module_view": bool(p.get("module_view", True)),
+        "page_view": bool(p.get("page_view", True)),
+        "intake_view": bool(p.get("intake_view", p.get("inbox_view", False))),
+        "priority": p.get("priority"),
+        "project_lead": p.get("project_lead"),
+        "start_date": p.get("start_date"),
+        "state_id": p.get("state_id"),
+        "target_date": p.get("target_date"),
+        "created_at": p.get("created_at"),
+        "created_by": p.get("created_by"),
+        "updated_at": p.get("updated_at"),
+        "updated_by": p.get("updated_by"),
+        "network": p.get("network"),
+        "_permissions": {
+            "relation": perms.get("relation"),
+            "permission_grants": perms.get("permission_grants") or [],
+        },
+    }
+
+
+def project_features_row(project_id: str) -> Dict[str, Any]:
+    return {
+        "id": project_id,
+        "project_id": project_id,
+        "is_project_updates_enabled": False,
+        "is_epic_enabled": False,
+        "is_issue_type_enabled": False,
+        "is_time_tracking_enabled": True,
+        "is_workflow_enabled": False,
+        "is_milestone_enabled": False,
+        "is_automated_cycle_enabled": False,
+        "is_parallel_cycles_enabled": False,
+        "is_manually_start_end_cycles_enabled": False,
+        # CE-ish feature toggles the UI also reads sometimes
+        "is_cycle_enabled": True,
+        "is_module_enabled": True,
+        "is_view_enabled": True,
+        "is_page_enabled": True,
+        "is_intake_enabled": True,
+        "is_issue_estimate_enabled": True,
+    }
+
+
 async def resolve_membership(slug: str, request: Request) -> Tuple[Optional[int], Optional[int], Optional[Dict[str, Any]]]:
-    """
-    Returns (http_status_or_none_on_success_path, ce_role, error_body).
-    Success: (None, role, None)
-    Auth failure: (401/403, None, body)
-    Not a member / missing: (404, None, body)
-    """
-    # Prefer CE workspace-members/me (returns membership incl. role)
     status, body, _ = await ce_get(f"/api/workspaces/{slug}/workspace-members/me/", request)
     if status == 401:
         return 401, None, body if isinstance(body, dict) else {"detail": "Authentication credentials were not provided."}
@@ -189,7 +253,6 @@ async def resolve_membership(slug: str, request: Request) -> Tuple[Optional[int]
     if status == 404:
         return 404, None, body if isinstance(body, dict) else {"error": "Workspace not found"}
     if status >= 400:
-        # Fall back to workspace list
         status2, body2, _ = await ce_get("/api/users/me/workspaces/", request)
         if status2 == 401:
             return 401, None, body2 if isinstance(body2, dict) else {"detail": "Authentication credentials were not provided."}
@@ -207,47 +270,42 @@ async def resolve_membership(slug: str, request: Request) -> Tuple[Optional[int]
 
     if not isinstance(body, dict):
         return 404, None, {"error": "Workspace not found"}
-    # empty / null membership
     if body.get("id") is None and body.get("role") is None and body.get("member") is None:
-        # Serializer of None may return empty-ish
         return 404, None, {"error": "Workspace not found"}
     role = body.get("role")
     try:
         role_i = int(role)
     except Exception:
-        # If membership object exists without role, treat as member
         role_i = 15
     return None, role_i, None
 
 
-def register_commercial_compat(app: FastAPI) -> None:
-    """Attach commercial SPA compatibility routes to the PI FastAPI app."""
+async def fetch_ce_projects(slug: str, request: Request) -> Tuple[Optional[int], List[Dict[str, Any]], Any]:
+    status, body, _ = await ce_get(f"/api/workspaces/{slug}/projects/", request)
+    if status != 200:
+        return status, [], body
+    if not isinstance(body, list):
+        return 500, [], {"error": "unexpected projects payload"}
+    return None, [p for p in body if isinstance(p, dict)], None
 
+
+def register_commercial_compat(app: FastAPI) -> None:
     @app.get("/api/workspaces/{slug}/permissions/")
     async def workspace_permissions(slug: str, request: Request):
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
-            # SPA: 403 → Not Authorized, other errors → Workspace not found
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        relation = relation_for_ce_role(role)
-        return permissions_payload(relation)
+        return permissions_payload(relation_for_ce_role(role))
 
     @app.get("/api/payments/workspaces/{slug}/current-plan/")
     async def workspace_current_plan(slug: str, request: Request):
-        # Auth-gated so random scanners don't get plan JSON; membership optional
         status, body, _ = await ce_get("/api/users/me/", request)
         if status == 401:
             return JSONResponse(
                 body if isinstance(body, dict) else {"detail": "Authentication credentials were not provided."},
                 status_code=401,
             )
-        plan = dict(SELFHOST_PLAN)
-        # try to fill occupied seats from membership count if available
-        err_status, role, _ = await resolve_membership(slug, request)
-        if err_status == 404:
-            # still return plan so billing banners don't brick non-members oddly
-            pass
-        return plan
+        return dict(SELFHOST_PLAN)
 
     @app.get("/api/payments/workspaces/{slug}/flags/")
     async def workspace_flags(slug: str, request: Request):
@@ -258,21 +316,9 @@ def register_commercial_compat(app: FastAPI) -> None:
                 status_code=401,
             )
         values = dict((BUSINESS_FLAGS or {}).get("values") or BUSINESS_FLAGS or {})
-        # Force core chrome on for self-host commercial mirror
-        values.update(
-            {
-                "APP_RAIL": True,
-                "AI_CHAT": True,
-                "AI_CONVERSE": True,
-                "AI_PAGES_EDIT": True,
-                "AI_PAGES_SUMMARY": True,
-                "AI_PAGES_BLOCKS": True,
-                "WIKI": True if "WIKI" in values else values.get("WIKI", True),
-            }
-        )
-        # Ensure all known flags true for max UI surface on self-host
         for k in list(values.keys()):
             values[k] = True
+        values.update({"APP_RAIL": True, "AI_CHAT": True, "AI_CONVERSE": True})
         return {"values": values}
 
     @app.get("/api/workspaces/{slug}/features/")
@@ -280,7 +326,6 @@ def register_commercial_compat(app: FastAPI) -> None:
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        # Try to attach real workspace id from CE list
         status, body, _ = await ce_get("/api/users/me/workspaces/", request)
         workspace_id = None
         if status == 200 and isinstance(body, list):
@@ -322,48 +367,144 @@ def register_commercial_compat(app: FastAPI) -> None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         return []
 
-    @app.get("/api/workspaces/{slug}/workspace-project-features/")
-    async def workspace_project_features(slug: str, request: Request):
+    # ---- CRITICAL: projects list for commercial SPA ----
+    @app.get("/api/workspaces/{slug}/projects-lite/")
+    async def projects_lite(slug: str, request: Request, ids: Optional[str] = None):
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        return {}
+        status, projects, body = await fetch_ce_projects(slug, request)
+        if status is not None:
+            return JSONResponse(body if isinstance(body, dict) else {"error": "Failed to load projects"}, status_code=status)
+        lite = [to_project_lite(p) for p in projects]
+        if ids:
+            wanted = {x.strip() for x in ids.split(",") if x.strip()}
+            lite = [p for p in lite if str(p.get("id")) in wanted]
+        return lite
+
+    @app.get("/api/workspaces/{slug}/workspace-project-features/")
+    async def workspace_project_features(slug: str, request: Request):
+        """Must return a LIST — SPA does `for (let e of t)`."""
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        status, projects, body = await fetch_ce_projects(slug, request)
+        if status is not None:
+            return JSONResponse(body if isinstance(body, dict) else {"error": "Failed to load projects"}, status_code=status)
+        return [project_features_row(str(p["id"])) for p in projects if p.get("id")]
 
     @app.get("/api/workspaces/{slug}/projects/{project_id}/features/")
     async def project_features_get(slug: str, project_id: str, request: Request):
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        return {
-            "id": project_id,
-            "project_id": project_id,
-            "is_project_updates_enabled": False,
-            "is_cycle_enabled": True,
-            "is_module_enabled": True,
-            "is_view_enabled": True,
-            "is_page_enabled": True,
-            "is_intake_enabled": True,
-            "is_issue_type_enabled": False,
-            "is_time_tracking_enabled": True,
-            "is_issue_estimate_enabled": True,
-        }
+        return project_features_row(project_id)
 
     @app.patch("/api/workspaces/{slug}/projects/{project_id}/features/")
     async def project_features_patch(slug: str, project_id: str, request: Request):
-        base = await project_features_get(slug, project_id, request)
-        if isinstance(base, JSONResponse):
-            return base
+        base = project_features_row(project_id)
         try:
             patch = await request.json()
         except Exception:
             patch = {}
-        if isinstance(patch, dict) and isinstance(base, dict):
+        if isinstance(patch, dict):
             base.update(patch)
         return base
 
+    # modules-lite → CE modules
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/modules-lite/")
+    async def modules_lite(slug: str, project_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        status, body, _ = await ce_get(f"/api/workspaces/{slug}/projects/{project_id}/modules/", request)
+        if status != 200:
+            return JSONResponse(body if isinstance(body, (dict, list)) else {"error": str(body)}, status_code=status)
+        return body if isinstance(body, list) else []
+
+    @app.get("/api/workspaces/{slug}/modules-lite/")
+    async def workspace_modules_lite(slug: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        # CE has workspaces/.../modules sometimes; fall back empty
+        status, body, _ = await ce_get(f"/api/workspaces/{slug}/modules/", request)
+        if status == 200 and isinstance(body, list):
+            return body
+        return []
+
+    @app.get("/api/workspaces/{slug}/cycles-lite/")
+    async def cycles_lite(slug: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        return []
+
+    @app.get("/api/workspaces/{slug}/preferences/")
+    async def workspace_preferences(slug: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        return {}
+
+    @app.get("/api/workspaces/{slug}/workflows/")
+    async def workflows(slug: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        return []
+
+    @app.get("/api/workspaces/{slug}/work-item-types/")
+    async def work_item_types(slug: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        return []
+
+    @app.get("/api/workspaces/{slug}/workitems/templates/")
+    async def workitem_templates(slug: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        return []
+
+    @app.get("/api/workspaces/{slug}/work-item-relation-definitions/")
+    async def relation_defs(slug: str, request: Request, is_default: Optional[bool] = None):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        return []
+
+    @app.get("/api/apps/{workspace_id}/enabled-integrations/")
+    async def enabled_integrations(workspace_id: str, request: Request):
+        status, body, _ = await ce_get("/api/users/me/", request)
+        if status == 401:
+            return JSONResponse(
+                body if isinstance(body, dict) else {"detail": "Authentication credentials were not provided."},
+                status_code=401,
+            )
+        return []
+
+    @app.get("/api/connections/{workspace_id}/user/{user_id}")
+    @app.get("/api/connections/{workspace_id}/user/{user_id}/")
+    async def user_connections(workspace_id: str, user_id: str, request: Request):
+        status, body, _ = await ce_get("/api/users/me/", request)
+        if status == 401:
+            return JSONResponse(
+                body if isinstance(body, dict) else {"detail": "Authentication credentials were not provided."},
+                status_code=401,
+            )
+        return []
+
+    @app.get("/api/silo/workspaces/{slug}/mcp-applications/")
+    async def mcp_apps(slug: str, request: Request, featured: Optional[bool] = None):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        return []
+
     @app.get("/api/users/me/workspaces/")
     async def users_me_workspaces(request: Request):
-        """Proxy CE list and add commercial fields (current_plan, role_slug)."""
         status, body, headers = await ce_get("/api/users/me/workspaces/", request)
         if status != 200:
             return JSONResponse(
@@ -374,7 +515,6 @@ def register_commercial_compat(app: FastAPI) -> None:
             body = [enrich_workspace(w) if isinstance(w, dict) else w for w in body]
         return body
 
-    # Soft-empty commercial-only collections so UI doesn't hard-crash
     @app.get("/api/workspaces/{slug}/teamspaces/")
     @app.get("/api/workspaces/{slug}/customers/")
     @app.get("/api/workspaces/{slug}/releases/")
@@ -388,7 +528,6 @@ def register_commercial_compat(app: FastAPI) -> None:
 
     @app.api_route("/api/payments/{path:path}", methods=["GET", "POST", "PATCH", "PUT", "DELETE"])
     async def payments_fallback(path: str, request: Request):
-        """Any other payments/* call: safe stub (never hits CE 404)."""
         status, body, _ = await ce_get("/api/users/me/", request)
         if status == 401:
             return JSONResponse(

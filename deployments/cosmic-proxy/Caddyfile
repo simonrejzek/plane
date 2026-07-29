@@ -39,6 +39,31 @@
 	@ws_wpf path_regexp ^/api/workspaces/[^/]+/workspace-project-features/?$
 	reverse_proxy @ws_wpf pi:8080
 
+	# Commercial project list (CE uses /projects/; SPA uses /projects-lite/)
+	@ws_projects_lite path_regexp ^/api/workspaces/[^/]+/projects-lite/?$
+	reverse_proxy @ws_projects_lite pi:8080
+
+	@ws_preferences path_regexp ^/api/workspaces/[^/]+/preferences/?$
+	reverse_proxy @ws_preferences pi:8080
+
+	@ws_workflows path_regexp ^/api/workspaces/[^/]+/workflows/?$
+	reverse_proxy @ws_workflows pi:8080
+
+	@ws_wit path_regexp ^/api/workspaces/[^/]+/work-item-types/?$
+	reverse_proxy @ws_wit pi:8080
+
+	@ws_templates path_regexp ^/api/workspaces/[^/]+/workitems/templates/?$
+	reverse_proxy @ws_templates pi:8080
+
+	@ws_reldefs path_regexp ^/api/workspaces/[^/]+/work-item-relation-definitions/?$
+	reverse_proxy @ws_reldefs pi:8080
+
+	@ws_modules_lite path_regexp ^/api/workspaces/[^/]+/(modules-lite|cycles-lite)/?$
+	reverse_proxy @ws_modules_lite pi:8080
+
+	@proj_modules_lite path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/modules-lite/?$
+	reverse_proxy @proj_modules_lite pi:8080
+
 	@proj_features path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/features/?$
 	reverse_proxy @proj_features pi:8080
 
@@ -53,6 +78,16 @@
 
 	@ws_initiatives path_regexp ^/api/workspaces/[^/]+/initiatives/?$
 	reverse_proxy @ws_initiatives pi:8080
+
+	# Integrations / silo stubs
+	@apps_integrations path_regexp ^/api/apps/[^/]+/enabled-integrations/?$
+	reverse_proxy @apps_integrations pi:8080
+
+	@connections path_regexp ^/api/connections/
+	reverse_proxy @connections pi:8080
+
+	@silo path_regexp ^/api/silo/
+	reverse_proxy @silo pi:8080
 
 	# Wiki pages live on PI (CE lacks workspace-level pages API)
 	@ws_wiki_pages path_regexp ^/api/workspaces/[^/]+/pages
