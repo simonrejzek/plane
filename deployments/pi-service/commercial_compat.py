@@ -96,6 +96,31 @@ async def ce_get(path: str, request: Request, params: Optional[Dict[str, Any]] =
     return r.status_code, body, dict(r.headers)
 
 
+async def ce_post(
+    path: str,
+    request: Request,
+    *,
+    json_body: Any = None,
+    form_body: Optional[Dict[str, Any]] = None,
+) -> Tuple[int, Any, Dict[str, str]]:
+    """POST to CE API (JSON or form). Used for mobile auth shims."""
+    url = f"{PLANE_API_BASE}{path}"
+    headers = _forward_headers(request)
+    # Prefer content-type matching payload
+    headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+        if form_body is not None:
+            r = await client.post(url, headers=headers, data=form_body)
+        else:
+            headers["Content-Type"] = "application/json"
+            r = await client.post(url, headers=headers, json=json_body if json_body is not None else {})
+    try:
+        body = r.json()
+    except Exception:
+        body = r.text
+    return r.status_code, body, dict(r.headers)
+
+
 def relation_for_ce_role(role: Optional[int]) -> str:
     if role is None:
         return "guest"
@@ -733,6 +758,66 @@ def register_commercial_compat(app: FastAPI) -> None:
         if wanted:
             return [m for m in lite if str(m.get("id")) in wanted]
         return as_page(lite)
+
+    @app.post("/auth/mobile/email-check/")
+    @app.post("/auth/mobile/email-check")
+    async def mobile_email_check(request: Request):
+        """Official mobile WebView (/m/auth) posts here; CE only has /auth/email-check/.
+
+        Without this shim, Continue after email does nothing (404 swallowed by SPA).
+        """
+        try:
+            payload = await request.json()
+        except Exception:
+            # form fallback
+            form = await request.form()
+            payload = {k: form.get(k) for k in form.keys()}
+        if not isinstance(payload, dict):
+            payload = {}
+        # normalize email key
+        email = payload.get("email") or payload.get("Email") or ""
+        status, body, _ = await ce_post(
+            "/auth/email-check/",
+            request,
+            json_body={"email": str(email).strip().lower()},
+        )
+        if status == 200 and isinstance(body, dict):
+            # Always force CREDENTIAL when magic/SMTP isn't usable so password UI shows
+            if body.get("status") == "MAGIC_CODE":
+                # if instances say magic disabled, still return CREDENTIAL
+                body = {**body, "status": "CREDENTIAL"}
+            return JSONResponse(body, status_code=200)
+        if isinstance(body, dict):
+            return JSONResponse(body, status_code=status if status >= 400 else 400)
+        return JSONResponse(
+            {"error": "email-check failed", "detail": str(body)[:300]},
+            status_code=status if status >= 400 else 502,
+        )
+
+    @app.post("/auth/mobile/magic-generate/")
+    @app.post("/auth/mobile/magic-generate")
+    async def mobile_magic_generate(request: Request):
+        """Proxy magic generate if CE has it; otherwise clear error for mobile SPA."""
+        try:
+            payload = await request.json()
+        except Exception:
+            form = await request.form()
+            payload = {k: form.get(k) for k in form.keys()}
+        if not isinstance(payload, dict):
+            payload = {}
+        # CE web path
+        status, body, _ = await ce_post("/auth/magic-generate/", request, json_body=payload)
+        if status < 400:
+            return JSONResponse(body if isinstance(body, dict) else {"ok": True}, status_code=status)
+        # Magic often disabled without SMTP — tell client clearly
+        return JSONResponse(
+            {
+                "error_code": "MAGIC_LINK_LOGIN_DISABLED",
+                "error_message": "MAGIC_LINK_LOGIN_DISABLED",
+                "error": "Magic login is not configured. Use email + password.",
+            },
+            status_code=400,
+        )
 
     @app.get("/api/instances/")
     async def instances_version_spoof(request: Request):

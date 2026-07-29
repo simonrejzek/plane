@@ -148,6 +148,13 @@
 
 	# CE API (projects, issues, modules, labels, worklogs, auth, …)
 	reverse_proxy /api/* api:8000
+	# Official mobile WebView: CE lacks /auth/mobile/email-check/ (Continue no-ops without this)
+	@mobile_email_check path /auth/mobile/email-check/ /auth/mobile/email-check
+	reverse_proxy @mobile_email_check pi:8080
+
+	@mobile_magic_gen path /auth/mobile/magic-generate/ /auth/mobile/magic-generate
+	reverse_proxy @mobile_magic_gen pi:8080
+
 	reverse_proxy /auth/* api:8000
 
 	# Official mobile app GraphQL
