@@ -2,6 +2,7 @@
 (function () {
   const qs = new URLSearchParams(location.search);
   const pathParts = location.pathname.split("/").filter(Boolean);
+  const isEmbed = qs.get("embed") === "1" || window.parent !== window;
   // /{workspace}/ai-chat[/...] or /cosmic-pilot/ui
   let workspaceSlug =
     qs.get("workspace") ||
@@ -28,6 +29,26 @@
     skillId: null,
     user: null,
   };
+
+  function notifyParent(payload) {
+    if (!isEmbed) return;
+    try {
+      window.parent.postMessage({ source: "plane-pilot", ...payload }, window.location.origin);
+    } catch (_) {}
+  }
+
+  function syncShellPath(chatId, opts) {
+    if (!state.workspaceSlug) return;
+    const path =
+      chatId && chatId !== "new"
+        ? `/${state.workspaceSlug}/ai-chat/${chatId}`
+        : `/${state.workspaceSlug}/ai-chat/`;
+    if (isEmbed) {
+      notifyParent({ type: "navigate", path, replace: !!(opts && opts.replace) });
+      return;
+    }
+    history.replaceState({}, "", path);
+  }
 
   const $ = (sel) => document.querySelector(sel);
   const el = {
@@ -177,14 +198,14 @@
       el.messages.innerHTML = `
         <div class="empty">
           <h1>How can I help?</h1>
-          <p>Pilot can answer questions, draft plans, and work across your workspace — same flow as Plane cloud Pilot.</p>
+          <p>Ask questions, draft plans, and work across your workspace.</p>
           <div class="prompt-grid">
             ${(state.prompts.length
               ? state.prompts
               : [
+                  { text: "Show me my urgent work items that are still pending" },
+                  { text: "What work items are assigned to me that are blocked, and which ones are blocking them?" },
                   { text: "Show me recent activity on my pending work items" },
-                  { text: "What changed in my pending work items today?" },
-                  { text: "What work items are assigned to me and not yet completed?" },
                 ]
             )
               .map((p) => `<button class="prompt-card" data-q="${escapeHtml(p.text)}">${escapeHtml(p.text)}</button>`)
@@ -356,10 +377,8 @@
       }
       renderMessages();
       renderThreads();
-      // update URL without reload when in full page mode
-      if (!qs.get("embed") && state.workspaceSlug) {
-        history.replaceState({}, "", `/${state.workspaceSlug}/pi-chat/${chatId}`);
-      }
+      syncShellPath(chatId, { replace: true });
+      notifyParent({ type: "title", title: results.title || "Conversation" });
     } catch (e) {
       console.warn("history", e);
     }
@@ -378,6 +397,7 @@
       },
     });
     state.chatId = res.chat_id;
+    syncShellPath(state.chatId, { replace: true });
     return state.chatId;
   }
 
@@ -517,9 +537,12 @@
     el.title.textContent = "New Conversation";
     renderMessages();
     renderSkills();
-    if (state.workspaceSlug && !qs.get("embed")) {
-      history.replaceState({}, "", `/${state.workspaceSlug}/ai-chat/new`);
+    if (state.workspaceSlug) {
+      const path = `/${state.workspaceSlug}/ai-chat/new`;
+      if (isEmbed) notifyParent({ type: "navigate", path, replace: true });
+      else history.replaceState({}, "", path);
     }
+    notifyParent({ type: "title", title: "New Conversation" });
     el.input.focus();
   }
 

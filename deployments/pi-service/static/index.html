@@ -11,6 +11,12 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet" />
     <script>
       window.PI_BASE_URL = "";
+      (function () {
+        try {
+          var qs = new URLSearchParams(location.search);
+          if (qs.get("embed") === "1") document.documentElement.classList.add("embed");
+        } catch (e) {}
+      })();
     </script>
   </head>
   <body>
@@ -28,7 +34,7 @@
         <div class="thread-list" id="favorite-list" style="flex: 0 0 auto; max-height: 28%"></div>
         <div class="section-label">Recent</div>
         <div class="thread-list" id="thread-list"></div>
-        <div class="sidebar-footer">Plane Intelligence · self-hosted</div>
+        <div class="sidebar-footer">Plane Intelligence</div>
       </aside>
 
       <main class="main">
@@ -58,7 +64,7 @@
 
         <div class="composer-wrap">
           <div class="composer">
-            <textarea id="composer-input" placeholder="Ask Pilot anything about your workspace…" rows="2"></textarea>
+            <textarea id="composer-input" placeholder="Ask anything about your workspace…" rows="2"></textarea>
             <div class="composer-bar">
               <div class="composer-left">
                 <button class="ghost-btn" id="websearch-btn" type="button">Web search</button>
@@ -68,7 +74,7 @@
               </div>
             </div>
           </div>
-          <div class="hint">Pilot uses your workspace context · modes match cloud (Ask / Build / Autopilot)</div>
+          <div class="hint">Plane Intelligence · Ask / Build / Autopilot</div>
         </div>
       </main>
     </div>

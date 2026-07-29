@@ -12,9 +12,9 @@ import polyfills from "@/lib/polyfills";
 
 void polyfills;
 
-// Wiki / AI full-page takeovers via PI inject (SPA → wiki/ai reloads into iframe shell).
-// Safe on project routes: inject only takes over /wiki and /ai-chat paths.
-(function loadCosmicWikiAiInject() {
+// Wiki full-page takeover via PI inject. AI uses native /ai-chat routes
+// (in-shell beside App Rail, like app.plane.so) — inject must not wipe AI.
+(function loadCosmicWikiInject() {
   if (typeof document === "undefined") return;
   if ((window as unknown as { __cosmicShellLoader?: boolean }).__cosmicShellLoader) return;
   (window as unknown as { __cosmicShellLoader?: boolean }).__cosmicShellLoader = true;

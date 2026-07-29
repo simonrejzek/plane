@@ -297,10 +297,11 @@ def resolve_llm(model_id: Optional[str]) -> str:
     mid = model_id or DEFAULT_MODEL_ID
     if not _is_deepseek(mid):
         mid = DEFAULT_MODEL_ID if _is_deepseek(DEFAULT_MODEL_ID) else "deepseek/deepseek-chat"
+    # Prefer the configured OpenRouter/DeepSeek id; map cloud-style names.
     aliases = {
-        "deepseek-ai/DeepSeek-V4-Pro": "deepseek/deepseek-chat",
-        "deepseek/deepseek-v4-flash": "deepseek/deepseek-chat",
+        "deepseek-ai/DeepSeek-V4-Pro": DEFAULT_MODEL_ID if _is_deepseek(DEFAULT_MODEL_ID) else "deepseek/deepseek-v4-flash",
         "deepseek-chat": "deepseek/deepseek-chat",
+        "deepseek/deepseek-chat": "deepseek/deepseek-chat",
     }
     return aliases.get(mid, mid)
 
@@ -649,9 +650,15 @@ async def llm_stream(messages: List[Dict[str, str]], model: str):
 
 
 @app.get("/healthz")
+@app.get("/api/v1/health/")
+@app.get("/api/v1/health")
+@app.get("/health/")
+@app.get("/live/")
+@app.get("/ready/")
 def healthz():
     return {
         "ok": True,
+        "status": "alive",
         "llm_configured": bool(LLM_API_KEY),
         "default_model": DEFAULT_MODEL_ID,
         "skills": len(SKILLS_SEED),
@@ -879,11 +886,21 @@ def get_models(workspace_id: Optional[str] = None):
 
 
 @app.get("/api/v1/chat/start/auth-check/")
-def auth_check(workspace_slug: str = Query(...)):
-    has = any(
-        c.get("workspace_slug") == workspace_slug and c.get("messages")
-        for c in CHATS.values()
-    )
+def auth_check(
+    workspace_slug: Optional[str] = Query(None),
+    workspace_id: Optional[str] = Query(None),
+):
+    """Cloud requires workspace context; accept slug and/or id like pi.plane.so."""
+    has = False
+    for c in CHATS.values():
+        if not c.get("messages") and not c.get("dialogue"):
+            continue
+        if workspace_slug and c.get("workspace_slug") == workspace_slug:
+            has = True
+            break
+        if workspace_id and c.get("workspace_id") == workspace_id:
+            has = True
+            break
     return {"is_authorized": True, "oauth_url": None, "has_chats": has}
 
 

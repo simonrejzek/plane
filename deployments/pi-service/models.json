@@ -1,24 +1,37 @@
 {
   "models": [
     {
-      "id": "deepseek/deepseek-chat",
-      "name": "DeepSeek Chat",
-      "provider": "DeepSeek",
-      "description": "DeepSeek chat model — only model enabled on this self-hosted instance.",
-      "type": "language_model",
-      "supports_web_search": false,
-      "supports_thinking": false,
-      "is_default": true
-    },
-    {
       "id": "deepseek/deepseek-v4-flash",
       "name": "DeepSeek V4 Flash",
       "provider": "DeepSeek",
-      "description": "Fast DeepSeek model for Pilot agent workflows.",
+      "description": "Fast DeepSeek model for Pilot agent workflows (self-host default).",
       "type": "language_model",
       "supports_web_search": false,
       "supports_thinking": false,
-      "is_default": false
+      "is_default": true,
+      "open": true
+    },
+    {
+      "id": "deepseek/deepseek-chat",
+      "name": "DeepSeek Chat",
+      "provider": "DeepSeek",
+      "description": "DeepSeek chat model for Plane Intelligence.",
+      "type": "language_model",
+      "supports_web_search": false,
+      "supports_thinking": false,
+      "is_default": false,
+      "open": true
+    },
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "name": "DeepSeek V4 Pro",
+      "provider": "DeepSeek",
+      "description": "DeepSeek V4 Pro — open model option matching cloud catalog naming.",
+      "type": "language_model",
+      "supports_web_search": false,
+      "supports_thinking": true,
+      "is_default": false,
+      "open": true
     }
   ]
 }
