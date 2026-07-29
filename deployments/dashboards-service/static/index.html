@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dashboards · Plane</title>
+    <link rel="stylesheet" href="/cosmic-dashboards/static/dashboards.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- List view -->
+      <section id="view-list" class="view">
+        <header class="page-header">
+          <div class="page-header-left">
+            <h1>Dashboards</h1>
+            <p class="subtitle">Create custom dashboards with widgets — same layout as Plane cloud.</p>
+          </div>
+          <div class="page-header-right">
+            <button type="button" class="btn primary" id="btn-create-dashboard">+ New dashboard</button>
+          </div>
+        </header>
+
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab active" data-access="private">Private</button>
+          <button type="button" class="tab" data-access="shared">Shared with me</button>
+          <button type="button" class="tab" data-access="public">Public</button>
+        </div>
+
+        <div id="dashboard-grid" class="dashboard-grid"></div>
+        <div id="dashboard-empty" class="empty-state hidden">
+          <div class="empty-icon">▦</div>
+          <h2>No dashboards yet</h2>
+          <p>Create a private dashboard to track work with charts and tables.</p>
+          <button type="button" class="btn primary" id="btn-create-empty">Create dashboard</button>
+        </div>
+      </section>
+
+      <!-- Detail view -->
+      <section id="view-detail" class="view hidden">
+        <header class="page-header detail-header">
+          <div class="page-header-left">
+            <button type="button" class="btn ghost" id="btn-back">← Dashboards</button>
+            <div class="title-row">
+              <h1 id="detail-title">Dashboard</h1>
+              <span class="badge" id="detail-access">Private</span>
+            </div>
+          </div>
+          <div class="page-header-right">
+            <button type="button" class="btn ghost" id="btn-rename">Rename</button>
+            <button type="button" class="btn ghost danger" id="btn-delete">Delete</button>
+            <button type="button" class="btn primary" id="btn-add-widget">+ Add widget</button>
+          </div>
+        </header>
+        <div id="widget-grid" class="widget-grid"></div>
+        <div id="widget-empty" class="empty-state hidden">
+          <div class="empty-icon">▣</div>
+          <h2>No widgets</h2>
+          <p>Add charts, numbers, and tables to build this dashboard.</p>
+          <button type="button" class="btn primary" id="btn-add-widget-empty">Add widget</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- Create dashboard modal -->
+    <div id="modal-dashboard" class="modal hidden">
+      <div class="modal-card">
+        <h2>New dashboard</h2>
+        <label>Name<input id="input-dash-name" type="text" placeholder="e.g. Engineering overview" /></label>
+        <label>Access
+          <select id="input-dash-access">
+            <option value="0">Private</option>
+            <option value="1">Public in workspace</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" data-close="modal-dashboard">Cancel</button>
+          <button type="button" class="btn primary" id="btn-dash-save">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add widget modal -->
+    <div id="modal-widget" class="modal hidden">
+      <div class="modal-card wide">
+        <h2>Add widget</h2>
+        <label>Name<input id="input-widget-name" type="text" placeholder="Widget title" /></label>
+        <label>Chart type
+          <select id="input-widget-type">
+            <option value="NUMBER">Number</option>
+            <option value="BAR_CHART">Bar chart</option>
+            <option value="LINE_CHART">Line chart</option>
+            <option value="AREA_CHART">Area chart</option>
+            <option value="PIE_CHART">Pie chart</option>
+            <option value="DONUT_CHART">Donut chart</option>
+            <option value="WORK_ITEMS_STATISTICS">Work items statistics</option>
+            <option value="WORK_ITEMS_TABLE">Work items table</option>
+            <option value="ASSIGNED_WORK_ITEMS_TABLE">Assigned work items table</option>
+            <option value="TABLE_CHART">Table</option>
+            <option value="CYCLE_PROGRESS">Cycle progress</option>
+          </select>
+        </label>
+        <label>Chart model
+          <select id="input-widget-model">
+            <option value="BASIC">Basic</option>
+            <option value="STACKED">Stacked</option>
+            <option value="GROUPED">Grouped</option>
+            <option value="MULTI_LINE">Multi line</option>
+            <option value="COMPARISON">Comparison</option>
+            <option value="PROGRESS">Progress</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" data-close="modal-widget">Cancel</button>
+          <button type="button" class="btn primary" id="btn-widget-save">Add widget</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/cosmic-dashboards/static/dashboards.js"></script>
+  </body>
+</html>
