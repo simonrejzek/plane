@@ -258,15 +258,11 @@ export const coreRoutes: RouteConfigEntry[] = [
       // ====================================================================
       // AI (Plane Intelligence / Pilot) — app.plane.so Business AI tab
       // Full content panel beside App Rail (no Projects sidebar).
+      // One module path per route id (RR forbids duplicate file→id mapping).
       // ====================================================================
       layout("./(all)/[workspaceSlug]/(ai-chat)/layout.tsx", [
-        route(":workspaceSlug/ai-chat", "./(all)/[workspaceSlug]/(ai-chat)/ai-chat-page.tsx"),
-        route(":workspaceSlug/ai-chat/new", "./(all)/[workspaceSlug]/(ai-chat)/ai-chat-page.tsx"),
-        route(":workspaceSlug/ai-chat/:chatId", "./(all)/[workspaceSlug]/(ai-chat)/ai-chat-page.tsx"),
-        // Legacy aliases used earlier in self-host shell
-        route(":workspaceSlug/pi-chat", "./(all)/[workspaceSlug]/(ai-chat)/ai-chat-page.tsx"),
-        route(":workspaceSlug/pi-chat/new", "./(all)/[workspaceSlug]/(ai-chat)/ai-chat-page.tsx"),
-        route(":workspaceSlug/pi-chat/:chatId", "./(all)/[workspaceSlug]/(ai-chat)/ai-chat-page.tsx"),
+        route(":workspaceSlug/ai-chat/*", "./(all)/[workspaceSlug]/(ai-chat)/ai-chat-page.tsx"),
+        route(":workspaceSlug/pi-chat/*", "./(all)/[workspaceSlug]/(ai-chat)/pi-chat-page.tsx"),
       ]),
 
       // ====================================================================

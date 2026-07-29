@@ -17,21 +17,25 @@ import { PageHead } from "@/components/core/page-title";
  *
  * Iframe src is fixed per workspace so chat navigation does not remount
  * Pilot; the embed posts path updates back to the shell.
+ *
+ * Routes: /:workspaceSlug/ai-chat/*  (and /pi-chat/* alias)
  */
 export default function AiChatPage() {
-  const { workspaceSlug, chatId } = useParams();
+  const params = useParams();
   const navigate = useNavigate();
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const slug = workspaceSlug?.toString() ?? "";
-  const initialChatId = useRef(chatId?.toString());
+  const slug = params.workspaceSlug?.toString() ?? "";
+
+  // splat: "", "new", or "{chatId}"
+  const splat = (params["*"] ?? params.chatId ?? "").toString().replace(/^\/+|\/+$/g, "");
+  const initialChatId = useRef(splat && splat !== "new" ? splat : undefined);
 
   const src = useMemo(() => {
-    const params = new URLSearchParams();
-    params.set("embed", "1");
-    if (slug) params.set("workspace", slug);
-    const id = initialChatId.current;
-    if (id && id !== "new") params.set("chat_id", id);
-    return `/cosmic-pilot/ui?${params.toString()}`;
+    const q = new URLSearchParams();
+    q.set("embed", "1");
+    if (slug) q.set("workspace", slug);
+    if (initialChatId.current) q.set("chat_id", initialChatId.current);
+    return `/cosmic-pilot/ui?${q.toString()}`;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable per workspace mount
   }, [slug]);
 
@@ -42,7 +46,6 @@ export default function AiChatPage() {
       if (!data || data.source !== "plane-pilot") return;
 
       if (data.type === "navigate" && typeof data.path === "string" && data.path.startsWith("/")) {
-        // Avoid fighting the iframe — only update shell URL.
         if (window.location.pathname !== data.path) {
           navigate(data.path, { replace: Boolean(data.replace) });
         }
