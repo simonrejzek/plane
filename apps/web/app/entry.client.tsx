@@ -12,6 +12,17 @@ import polyfills from "@/lib/polyfills";
 
 void polyfills;
 
+// Wiki / AI full-page takeovers via PI inject (SPA → wiki/ai reloads into iframe shell).
+// Safe on project routes: inject only takes over /wiki and /ai-chat paths.
+(function loadCosmicWikiAiInject() {
+  if (typeof document === "undefined") return;
+  if ((window as unknown as { __cosmicShellLoader?: boolean }).__cosmicShellLoader) return;
+  (window as unknown as { __cosmicShellLoader?: boolean }).__cosmicShellLoader = true;
+  const s = document.createElement("script");
+  s.src = "/cosmic-pilot/static/inject.js";
+  s.async = true;
+  document.head.appendChild(s);
+})();
 startTransition(() => {
   hydrateRoot(
     document,

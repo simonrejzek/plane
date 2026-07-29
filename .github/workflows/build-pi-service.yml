@@ -34,13 +34,13 @@ jobs:
           file: deployments/pi-service/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/plane-pi:shell-v3.1
+            ghcr.io/${{ github.repository_owner }}/plane-pi:shell-v3.8
             ghcr.io/${{ github.repository_owner }}/plane-pi:preview
 
       - name: Mirror to public ttl.sh
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-pi:shell-v3.1
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:shell-v3.1 ttl.sh/cosmicboosts-plane-pi:shell-v3.1
-          docker push ttl.sh/cosmicboosts-plane-pi:shell-v3.1
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-pi:shell-v3.8
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:shell-v3.8 ttl.sh/cosmicboosts-plane-pi:shell-v3.8
+          docker push ttl.sh/cosmicboosts-plane-pi:shell-v3.8

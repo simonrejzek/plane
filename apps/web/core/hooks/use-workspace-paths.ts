@@ -16,8 +16,11 @@ export const useWorkspacePaths = () => {
 
   const isSettingsPath = pathname.includes(`/${workspaceSlug}/settings`);
   const isWikiPath = pathname.includes(`/${workspaceSlug}/wiki`);
-  const isAiPath = pathname.includes(`/${workspaceSlug}/pi-chat`);
-  const isProjectsPath = pathname.includes(`/${workspaceSlug}/`) && !isWikiPath && !isAiPath && !isSettingsPath;
+  // Cloud uses /ai-chat; self-host also accepts /pi-chat alias
+  const isAiPath =
+    pathname.includes(`/${workspaceSlug}/ai-chat`) || pathname.includes(`/${workspaceSlug}/pi-chat`);
+  const isProjectsPath =
+    pathname.includes(`/${workspaceSlug}/`) && !isWikiPath && !isAiPath && !isSettingsPath;
   const isNotificationsPath = pathname.includes(`/${workspaceSlug}/notifications`);
 
   return {
