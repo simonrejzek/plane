@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import os
 import time
 import uuid
@@ -410,6 +411,455 @@ def _extract_title(query: str, default: str = "Untitled") -> str:
     return (title[:200] or default).strip()
 
 
+
+# ---------------------------------------------------------------------------
+# Agent tools (executed server-side — never leave raw tool XML in the chat)
+# ---------------------------------------------------------------------------
+
+AGENT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_work_items",
+            "description": "Search work items/issues in the workspace by free text (title, identifier, keywords). Always use this before asking the user for an issue ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search text, e.g. 'plane ai'"},
+                    "project_id": {"type": "string", "description": "Optional project UUID to limit search"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_work_item",
+            "description": "Get full details for one work item by project_id + issue_id (or sequence id with project).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "issue_id": {"type": "string", "description": "Issue UUID"},
+                },
+                "required": ["project_id", "issue_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_work_item",
+            "description": "Update a work item (description, name/title, priority, etc.). Use after search_work_items found the target.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "issue_id": {"type": "string"},
+                    "description": {
+                        "type": "string",
+                        "description": "Plain-text description to set (will be wrapped as HTML)",
+                    },
+                    "description_html": {
+                        "type": "string",
+                        "description": "Optional raw HTML description",
+                    },
+                    "name": {"type": "string", "description": "Optional new title"},
+                    "priority": {"type": "string", "description": "urgent|high|medium|low|none"},
+                },
+                "required": ["project_id", "issue_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_projects",
+            "description": "List projects in the current workspace",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_work_items",
+            "description": "List recent work items in a project (or first project if omitted)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "limit": {"type": "integer", "default": 20},
+                },
+            },
+        },
+    },
+]
+
+
+def _flatten_issue_results(data: Any) -> List[Dict[str, Any]]:
+    if data is None:
+        return []
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if not isinstance(data, dict):
+        return []
+    results = data.get("results", data.get("data"))
+    if isinstance(results, list):
+        return [x for x in results if isinstance(x, dict)]
+    if isinstance(results, dict):
+        out: List[Dict[str, Any]] = []
+        for v in results.values():
+            if isinstance(v, dict) and isinstance(v.get("results"), list):
+                out.extend([x for x in v["results"] if isinstance(x, dict)])
+            elif isinstance(v, list):
+                out.extend([x for x in v if isinstance(x, dict)])
+        return out
+    # global search shape: {results: {issue: [...]}}
+    nested = data.get("results")
+    if isinstance(nested, dict) and isinstance(nested.get("issue"), list):
+        return [x for x in nested["issue"] if isinstance(x, dict)]
+    return []
+
+
+def _issue_brief(issue: Dict[str, Any], project_identifier: str = "") -> Dict[str, Any]:
+    pid = issue.get("project_id") or issue.get("project")
+    ident = project_identifier or issue.get("project__identifier") or ""
+    seq = issue.get("sequence_id")
+    key = f"{ident}-{seq}" if ident and seq is not None else (str(seq) if seq is not None else "")
+    return {
+        "id": issue.get("id"),
+        "project_id": pid,
+        "sequence_id": seq,
+        "key": key,
+        "name": issue.get("name"),
+        "priority": issue.get("priority"),
+        "state_id": issue.get("state_id"),
+        "description_html": (issue.get("description_html") or "")[:500],
+    }
+
+
+async def _projects(workspace_slug: str, cookie: str, csrf: str) -> List[Dict[str, Any]]:
+    res = await plane_api("GET", f"/api/workspaces/{workspace_slug}/projects/", cookie, csrf)
+    if res.get("status") != 200:
+        return []
+    data = res.get("data")
+    if isinstance(data, list):
+        return [p for p in data if isinstance(p, dict)]
+    if isinstance(data, dict):
+        rows = data.get("results") or data.get("data") or []
+        return [p for p in rows if isinstance(p, dict)] if isinstance(rows, list) else []
+    return []
+
+
+async def tool_search_work_items(
+    workspace_slug: str, cookie: str, csrf: str, query: str, project_id: Optional[str] = None
+) -> Dict[str, Any]:
+    from urllib.parse import quote
+
+    q = (query or "").strip()
+    hits: List[Dict[str, Any]] = []
+    # 1) Global workspace search
+    if q:
+        res = await plane_api(
+            "GET",
+            f"/api/workspaces/{workspace_slug}/search/?search={quote(q)}&query={quote(q)}",
+            cookie,
+            csrf,
+        )
+        if res.get("status") == 200:
+            for issue in _flatten_issue_results(res.get("data")):
+                hits.append(_issue_brief(issue))
+
+    # 2) Per-project list + local filter (more reliable)
+    projects = await _projects(workspace_slug, cookie, csrf)
+    proj_map = {p.get("id"): p for p in projects}
+    targets = [p for p in projects if not project_id or p.get("id") == project_id]
+    ql = q.lower()
+    for p in targets[:10]:
+        pid = p.get("id")
+        if not pid:
+            continue
+        res = await plane_api(
+            "GET",
+            f"/api/workspaces/{workspace_slug}/projects/{pid}/issues/?per_page=100",
+            cookie,
+            csrf,
+        )
+        if res.get("status") != 200:
+            continue
+        for issue in _flatten_issue_results(res.get("data")):
+            name = (issue.get("name") or "").lower()
+            seq = str(issue.get("sequence_id") or "")
+            ident = (p.get("identifier") or "").lower()
+            key = f"{ident}-{seq}"
+            if not ql or ql in name or ql in seq or ql in key or any(tok in name for tok in ql.split() if len(tok) > 2):
+                brief = _issue_brief(issue, p.get("identifier") or "")
+                brief["project_id"] = pid
+                brief["project_name"] = p.get("name")
+                brief["project_identifier"] = p.get("identifier")
+                # dedupe by id
+                if not any(h.get("id") == brief.get("id") for h in hits):
+                    hits.append(brief)
+
+    # Prefer stronger title matches first
+    if ql:
+        hits.sort(key=lambda h: (0 if ql in (h.get("name") or "").lower() else 1, (h.get("name") or "")))
+    return {"count": len(hits), "results": hits[:25]}
+
+
+async def tool_get_work_item(
+    workspace_slug: str, cookie: str, csrf: str, project_id: str, issue_id: str
+) -> Dict[str, Any]:
+    res = await plane_api(
+        "GET",
+        f"/api/workspaces/{workspace_slug}/projects/{project_id}/issues/{issue_id}/",
+        cookie,
+        csrf,
+    )
+    return res
+
+
+async def tool_update_work_item(
+    workspace_slug: str,
+    cookie: str,
+    csrf: str,
+    project_id: str,
+    issue_id: str,
+    description: Optional[str] = None,
+    description_html: Optional[str] = None,
+    name: Optional[str] = None,
+    priority: Optional[str] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    if name is not None:
+        payload["name"] = name
+    if priority is not None:
+        payload["priority"] = priority
+    if description_html is not None:
+        payload["description_html"] = description_html
+    elif description is not None:
+        # simple paragraph HTML
+        safe = (
+            description.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n\n", "</p><p>")
+            .replace("\n", "<br/>")
+        )
+        payload["description_html"] = f"<p>{safe}</p>"
+    if not payload:
+        return {"status": 400, "error": "No fields to update"}
+    res = await plane_api(
+        "PATCH",
+        f"/api/workspaces/{workspace_slug}/projects/{project_id}/issues/{issue_id}/",
+        cookie,
+        csrf,
+        payload,
+    )
+    return res
+
+
+async def dispatch_agent_tool(
+    name: str,
+    args: Dict[str, Any],
+    workspace_slug: str,
+    cookie: str,
+    csrf: str,
+) -> Any:
+    try:
+        if name in ("search_work_items", "search_issues", "search_issue"):
+            return await tool_search_work_items(
+                workspace_slug, cookie, csrf, args.get("query") or "", args.get("project_id")
+            )
+        if name in ("get_work_item", "get_issue"):
+            return await tool_get_work_item(
+                workspace_slug, cookie, csrf, args.get("project_id") or "", args.get("issue_id") or ""
+            )
+        if name in ("update_work_item", "update_issue", "edit_work_item"):
+            return await tool_update_work_item(
+                workspace_slug,
+                cookie,
+                csrf,
+                args.get("project_id") or "",
+                args.get("issue_id") or "",
+                description=args.get("description"),
+                description_html=args.get("description_html"),
+                name=args.get("name") or args.get("title"),
+                priority=args.get("priority"),
+            )
+        if name == "list_projects":
+            projects = await _projects(workspace_slug, cookie, csrf)
+            return {
+                "results": [
+                    {
+                        "id": p.get("id"),
+                        "name": p.get("name"),
+                        "identifier": p.get("identifier"),
+                    }
+                    for p in projects
+                ]
+            }
+        if name in ("list_work_items", "list_issues"):
+            projects = await _projects(workspace_slug, cookie, csrf)
+            pid = args.get("project_id") or (projects[0].get("id") if projects else None)
+            if not pid:
+                return {"error": "No project found"}
+            res = await plane_api(
+                "GET",
+                f"/api/workspaces/{workspace_slug}/projects/{pid}/issues/?per_page={int(args.get('limit') or 20)}",
+                cookie,
+                csrf,
+            )
+            issues = _flatten_issue_results(res.get("data"))
+            proj = next((p for p in projects if p.get("id") == pid), {})
+            return {
+                "project_id": pid,
+                "results": [_issue_brief(i, proj.get("identifier") or "") for i in issues[:30]],
+            }
+        return {"error": f"Unknown tool: {name}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _parse_args(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
+    return {}
+
+
+def strip_tool_call_artifacts(text: str) -> str:
+    """Remove leaked native tool-call markup (DSML / XML / JSON tool blocks) from model output."""
+    if not text:
+        return text
+    cleaned = text
+    patterns = [
+        # ASCII control-token style: <|DSML|tool_calls> ...
+        r"<\|DSML\|[^>]*>.*?(?:</\|DSML\|[^>]*>|$)",
+        r"<\|tool_calls?\|?>.*?(?:<\|/?tool_calls?\|?>|$)",
+        # Fullwidth/unicode fence style often emitted by Grok/DeepSeek: <｜DSML｜...>
+        r"<｜DSML｜[^>]*>.*?(?:</｜DSML｜[^>]*>|$)",
+        r"<｜[^｜]*tool_calls?[^｜]*｜>.*?(?:</｜[^｜]*｜>|$)",
+        r"<tool_call>.*?</tool_call>",
+        r"<tool_calls>.*?</tool_calls>",
+        r"```(?:json|xml|tool)?\s*\{[^{}]*\"name\"\s*:\s*\"(?:search_issues|search_work_items)\".*?\}```",
+        r"invoke\s+name=\"[^\"]+\".*?(?:</invoke>|$)",
+        r"<parameter\s+name=\"[^\"]+\">.*?</parameter>",
+        # Bare function-call dumps without fences
+        r"(?is)(?:tool_calls?|function_call)\s*[:=]\s*\{.*?\}",
+        r"(?is)\b(?:search_issues|search_work_items|update_work_item|get_work_item)\s*\(\s*\{.*?\}\s*\)",
+    ]
+    for pat in patterns:
+        cleaned = re.sub(pat, "", cleaned, flags=re.I | re.S)
+    # Drop orphaned function-call lines / leftover parameter noise
+    cleaned = re.sub(
+        r"(?m)^\s*(?:search_issues|search_work_items|update_work_item|get_work_item|list_projects|list_work_items)\s*$",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(r"(?m)^\s*(?:workspace_slug|query|project_id|issue_id)\s*[:=].*$", "", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    # If nothing useful remains after stripping tool junk, say so clearly
+    if not cleaned or cleaned in ("Thoughts", "Let me search for it.", "Let me search for it"):
+        return ""
+    return cleaned
+
+
+async def llm_complete(
+    messages: List[Dict[str, Any]],
+    model: str,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Any = None,
+) -> Dict[str, Any]:
+    """Non-streaming chat completion (for tool loop)."""
+    if not LLM_API_KEY:
+        return {"content": "Pilot AI is not configured: missing LLM_API_KEY.", "tool_calls": []}
+    url = f"{LLM_BASE_URL}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LLM_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": f"https://{APP_DOMAIN}",
+        "X-Title": "Plane Intelligence Self-Hosted",
+    }
+    body: Dict[str, Any] = {
+        "model": resolve_llm(model),
+        "messages": messages,
+        "stream": False,
+        "temperature": 0.2,
+    }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = tool_choice if tool_choice is not None else "auto"
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            r = await client.post(url, headers=headers, json=body)
+            if r.status_code >= 400:
+                return {
+                    "content": f"LLM error ({r.status_code}): {r.text[:400]}",
+                    "tool_calls": [],
+                }
+            data = r.json()
+            msg = (data.get("choices") or [{}])[0].get("message") or {}
+            return {
+                "content": msg.get("content") or "",
+                "tool_calls": msg.get("tool_calls") or [],
+                "raw": msg,
+            }
+    except Exception as e:
+        return {"content": f"LLM request failed: {e}", "tool_calls": []}
+
+
+async def run_agent_with_tools(
+    messages: List[Dict[str, Any]],
+    model: str,
+    workspace_slug: str,
+    cookie: str,
+    csrf: str,
+    max_rounds: int = 4,
+) -> str:
+    """Tool-calling loop then final natural-language answer (no raw tool markup)."""
+    msgs: List[Dict[str, Any]] = list(messages)
+    for _ in range(max_rounds):
+        result = await llm_complete(msgs, model, tools=AGENT_TOOLS, tool_choice="auto")
+        tool_calls = result.get("tool_calls") or []
+        content = result.get("content") or ""
+        if not tool_calls:
+            return strip_tool_call_artifacts(content)
+
+        # Append assistant message with tool_calls for the API conversation
+        assistant_msg: Dict[str, Any] = {"role": "assistant", "content": content or None}
+        assistant_msg["tool_calls"] = tool_calls
+        msgs.append(assistant_msg)
+
+        for tc in tool_calls:
+            fn = (tc.get("function") or {})
+            name = fn.get("name") or ""
+            args = _parse_args(fn.get("arguments"))
+            tool_result = await dispatch_agent_tool(name, args, workspace_slug, cookie, csrf)
+            msgs.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.get("id") or str(uuid.uuid4()),
+                    "name": name,
+                    "content": json.dumps(tool_result, ensure_ascii=False)[:8000],
+                }
+            )
+
+    # Final answer without tools
+    final = await llm_complete(msgs + [
+        {
+            "role": "user",
+            "content": "Using the tool results above, give the final answer to the user. Do not emit tool calls.",
+        }
+    ], model, tools=None)
+    return strip_tool_call_artifacts(final.get("content") or "")
+
+
 async def execute_plane_tools(
     mode: str,
     query: str,
@@ -417,7 +867,7 @@ async def execute_plane_tools(
     cookie: str,
     csrf: str,
 ) -> str:
-    """Agent actions for Ask/Build/Autopilot — list, create, edit work items and wiki pages."""
+    """Keyword-triggered tools + pre-search when user mentions work items / descriptions."""
     if not workspace_slug:
         return ""
     q = (query or "").lower()
@@ -434,8 +884,89 @@ async def execute_plane_tools(
             "delete ",
             "make ",
             "write ",
+            "set ",
+            "change ",
+            "description",
         )
     )
+
+    # Proactive search when the user references a work item without giving an ID
+    wants_item = any(
+        k in q
+        for k in (
+            "work item",
+            "issue",
+            "ticket",
+            "task",
+            "description",
+            "find ",
+            "search ",
+            "plane ai",
+            "update ",
+            "edit ",
+            "add a description",
+            "add description",
+        )
+    )
+    if wants_item:
+        # Extract quoted title or last free-text phrase after verbs
+        search_q = query
+        m = re.search(r'["“](.+?)["”]', query)
+        if m:
+            search_q = m.group(1)
+        else:
+            for sep in (
+                "work item ",
+                "issue ",
+                "task ",
+                "called ",
+                "named ",
+                "titled ",
+                "for ",
+                "to ",
+            ):
+                if sep in q:
+                    search_q = query[q.index(sep) + len(sep) :].strip(" .\"'")
+                    break
+        # Strip trailing "work item" noise
+        search_q = re.sub(
+            r"\b(work item|issue|task|description|please|the|a|an)\b",
+            " ",
+            search_q,
+            flags=re.I,
+        ).strip()
+        if len(search_q) >= 2:
+            found = await tool_search_work_items(workspace_slug, cookie, csrf, search_q)
+            notes.append(f"search_work_items({search_q!r}) => {json.dumps(found, ensure_ascii=False)[:3500]}")
+
+            # Auto-update description if clearly requested and we found a match
+            if can_mutate and found.get("results") and any(
+                k in q for k in ("description", "describe", "add desc", "set desc", "write desc")
+            ):
+                target = found["results"][0]
+                # Extract description text after "description" keywords
+                desc = None
+                for pat in (
+                    r"description[:\s]+(.+)$",
+                    r"describe (?:it|this|the work item)?\s*(?:as|with)?\s*[:\-]?\s*(.+)$",
+                    r"add (?:a )?description\s*[:\-]\s*(.+)$",
+                ):
+                    mm = re.search(pat, query, flags=re.I | re.S)
+                    if mm:
+                        desc = mm.group(1).strip()
+                        break
+                if desc and target.get("project_id") and target.get("id"):
+                    upd = await tool_update_work_item(
+                        workspace_slug,
+                        cookie,
+                        csrf,
+                        target["project_id"],
+                        target["id"],
+                        description=desc,
+                    )
+                    notes.append(
+                        f"update_work_item({target.get('key') or target.get('id')}) => {json.dumps(upd)[:1500]}"
+                    )
 
     # Always allow read-style tools in any mode
     if any(
@@ -583,7 +1114,6 @@ async def execute_plane_tools(
                 target = p
                 break
         if not target and pages:
-            # fall back to most recently updated
             target = sorted(pages.values(), key=lambda x: x.get("updated_at") or "", reverse=True)[0]
         if target:
             new_title = _extract_title(query, target.get("name") or "Untitled")
@@ -602,6 +1132,7 @@ async def execute_plane_tools(
             notes.append("No wiki page found to update.")
 
     return "\n".join(notes)
+
 
 
 async def llm_stream(messages: List[Dict[str, str]], model: str):
@@ -1049,9 +1580,14 @@ async def stream_answer(stream_token: str, request: Request):
         "You are Plane Intelligence (Pilot AI), the AI assistant inside Plane project management "
         "(same product as app.plane.so Pilot). Be concise, helpful, and structured. Use markdown. "
         f"Workspace: {job.get('workspace_slug') or 'unknown'}. Mode: {mode}. "
+        "CRITICAL RULES: "
+        "1) NEVER invent or print tool-call XML/JSON/markup (no search_issues, no DSML, no tool_calls tags). "
+        "2) NEVER ask the user for an issue ID or project if you can look it up with tools. "
+        "3) When the user asks to edit/find a work item by name (e.g. 'plane ai'), call search_work_items first, then act. "
+        "4) Prefer doing the action over asking clarifying questions. "
         "In Ask mode: answer questions about the workspace. "
-        "In Build mode: help create and edit work items, pages, and plans; when tools ran, explain results. "
-        "In Autopilot mode: proactively suggest and describe multi-step changes. "
+        "In Build mode: create and edit work items, pages, and plans using tools; explain results. "
+        "In Autopilot mode: proactively execute multi-step changes with tools. "
         "Only DeepSeek models are available on this instance."
     )
     if job.get("skill_id") and SKILLS_SEED:
@@ -1090,13 +1626,73 @@ async def stream_answer(stream_token: str, request: Request):
             yield "event: reasoning\ndata: " + json.dumps({"header": h, "content": ""}) + "\n\n"
             await asyncio.sleep(0.05)
 
+        # Prefer tool-calling agent for action/find queries; stream the final answer
+        q_lower = (job.get("query") or "").lower()
+        # Always tool-call when workspace is known for action/find language — including
+        # short follow-ups like "just find it yourself?" that rely on chat history.
+        use_tools = bool(job.get("workspace_slug")) and (
+            any(
+                k in q_lower
+                for k in (
+                    "work item",
+                    "issue",
+                    "task",
+                    "description",
+                    "find",
+                    "search",
+                    "update",
+                    "edit",
+                    "add ",
+                    "create",
+                    "plane ai",
+                    "module",
+                    "project",
+                    "list ",
+                    "show ",
+                    "assign",
+                    "priority",
+                    "yourself",
+                    "look it",
+                    "look up",
+                    "look for",
+                    "locate",
+                    "where is",
+                    "which issue",
+                    "which work",
+                )
+            )
+            or (job.get("mode") or "").lower() in ("build", "autopilot")
+        )
         full = []
-        async for chunk in llm_stream(msgs, job.get("llm") or DEFAULT_MODEL_ID):
-            full.append(chunk)
-            yield "event: delta\ndata: " + json.dumps({"chunk": chunk}) + "\n\n"
-            await asyncio.sleep(0)
+        if use_tools:
+            try:
+                answer = await run_agent_with_tools(
+                    msgs,
+                    job.get("llm") or DEFAULT_MODEL_ID,
+                    job.get("workspace_slug") or "",
+                    cookie,
+                    csrf,
+                )
+            except Exception as e:
+                answer = f"Agent error: {e}"
+            answer = strip_tool_call_artifacts(answer)
+            # Fake-stream for UI parity
+            step = 24
+            for i in range(0, len(answer), step):
+                chunk = answer[i : i + step]
+                full.append(chunk)
+                yield "event: delta\ndata: " + json.dumps({"chunk": chunk}) + "\n\n"
+                await asyncio.sleep(0)
+        else:
+            async for chunk in llm_stream(msgs, job.get("llm") or DEFAULT_MODEL_ID):
+                chunk = strip_tool_call_artifacts(chunk) if ("<" in chunk or "search_issues" in chunk) else chunk
+                if not chunk:
+                    continue
+                full.append(chunk)
+                yield "event: delta\ndata: " + json.dumps({"chunk": chunk}) + "\n\n"
+                await asyncio.sleep(0)
 
-        answer = "".join(full)
+        answer = strip_tool_call_artifacts("".join(full))
         answer_id = str(uuid.uuid4())
         if chat is not None:
             chat.setdefault("messages", []).append(
@@ -1158,7 +1754,8 @@ async def get_answer_legacy(request: Request):
     ws = body.get("workspace_slug")
     system = (
         "You are Plane Intelligence (Pilot AI). Be helpful and concise. "
-        f"Workspace: {ws or 'unknown'}. Mode: {mode}."
+        f"Workspace: {ws or 'unknown'}. Mode: {mode}. "
+        "Never emit raw tool-call XML. Use tools to find work items yourself — do not ask for issue IDs."
     )
     ws_ctx = await gather_workspace_context(ws, cookie, csrf)
     if ws_ctx:
@@ -1167,10 +1764,14 @@ async def get_answer_legacy(request: Request):
     if tool_notes:
         system += "\n\nTool results:\n" + tool_notes
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": query}]
-    chunks: List[str] = []
-    async for chunk in llm_stream(msgs, llm):
-        chunks.append(chunk)
-    answer = "".join(chunks)
+    if ws:
+        answer = await run_agent_with_tools(msgs, llm, ws, cookie, csrf)
+    else:
+        chunks: List[str] = []
+        async for chunk in llm_stream(msgs, llm):
+            chunks.append(chunk)
+        answer = "".join(chunks)
+    answer = strip_tool_call_artifacts(answer)
     CHATS[chat_id] = {
         "chat_id": chat_id,
         "title": (query[:48] + ("…" if len(query) > 48 else "")) or "New Conversation",
