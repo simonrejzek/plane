@@ -80,12 +80,6 @@ export function Layout({ children }: { children: ReactNode }) {
           {children}
         </ThemeProvider>
         <Scripts />
-        {/* Cosmic shell: full-page Wiki + Pilot takeover (SPA shell loads this client-side) */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `(function(){if(window.__cosmicShellLoader)return;window.__cosmicShellLoader=1;var s=document.createElement("script");s.src="/cosmic-pilot/static/inject.js";s.async=true;document.head.appendChild(s);})();`,
-          }}
-        />
         {!!isSessionRecorderEnabled && process.env.VITE_SESSION_RECORDER_KEY && (
           <Script id="clarity-tracking">
             {`(function(c,l,a,r,i,t,y){
