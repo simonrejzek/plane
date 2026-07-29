@@ -108,4 +108,72 @@
     maybeHandleShellNav();
   };
   window.addEventListener("popstate", maybeHandleShellNav);
+
+
+  // ---- Cosmic fixes: hide tours, soft-fix raw ICU labels ----
+  (function cosmicUiFixes() {
+    try {
+      // Mark product tours dismissed in localStorage (covers SPA variants)
+      const keys = [
+        "plane.product_tour.completed",
+        "plane.tour.completed",
+        "is_tour_completed",
+        "is_navigation_tour_completed",
+        "product_tour_dismissed",
+      ];
+      keys.forEach((k) => {
+        try {
+          localStorage.setItem(k, "true");
+        } catch (_) {}
+      });
+    } catch (_) {}
+
+    // Soft-replace raw ICU plural blobs that leak into DOM text nodes
+    function fixIcuText(root) {
+      try {
+        const re = /\{count,\s*plural,\s*one\s*\{([^}]*)\}\s*other\s*\{([^}]*)\}\}/gi;
+        const walk = (node) => {
+          if (!node) return;
+          if (node.nodeType === 3) {
+            const v = node.nodeValue;
+            if (v && v.indexOf("plural") !== -1) {
+              node.nodeValue = v.replace(re, "$2");
+            }
+            return;
+          }
+          if (node.nodeType === 1) {
+            const tag = (node.tagName || "").toLowerCase();
+            if (tag === "script" || tag === "style") return;
+            for (let i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+          }
+        };
+        walk(root || document.body);
+      } catch (_) {}
+    }
+
+    // Run periodically for first minute after load
+    let n = 0;
+    const timer = setInterval(() => {
+      fixIcuText(document.body);
+      if (++n > 30) clearInterval(timer);
+    }, 2000);
+    document.addEventListener("DOMContentLoaded", () => fixIcuText(document.body));
+
+    // Wiki/theme blank: if main content is empty for 3s on non-auth routes, force light surface
+    setTimeout(() => {
+      try {
+        const main = document.querySelector("main") || document.getElementById("root");
+        if (!main) return;
+        const text = (main.innerText || "").trim();
+        const rect = main.getBoundingClientRect();
+        if (text.length < 2 && rect.height > 100) {
+          // prevent pure grey void — ensure theme attribute and background
+          const d = document.documentElement;
+          if (!d.getAttribute("data-theme")) d.setAttribute("data-theme", "dark");
+          d.style.background = getComputedStyle(d).backgroundColor || "#0e0f10";
+        }
+      } catch (_) {}
+    }, 3500);
+  })();
+
 })();

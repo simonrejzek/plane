@@ -40,6 +40,10 @@ BUSINESS_FLAGS: Dict[str, Any] = _load("business_flags.json", {"values": {}})
 WORKSPACE_ROLES: List[Dict[str, Any]] = _load("workspace_roles.json", [])
 
 PREF_STORE: Dict[str, Dict[str, Any]] = {}
+# work-item votes: key = f"{project_id}:{issue_id}" -> list of vote dicts
+VOTE_STORE: Dict[str, List[Dict[str, Any]]] = {}
+# work-item updates (status posts): key same
+UPDATE_STORE: Dict[str, List[Dict[str, Any]]] = {}
 
 # Prefer cloud-shaped plan so commercial mobile treats the workspace as SaaS AI surface.
 # (is_self_managed=true hides Pilot on official clients even when feature flags are on.)
@@ -414,6 +418,48 @@ async def fetch_ce_projects(slug: str, request: Request) -> Tuple[Optional[int],
         return 500, [], {"error": "unexpected projects payload"}
     return None, [p for p in body if isinstance(p, dict)], None
 
+
+
+def _ensure_state_groups(rows: List[Dict[str, Any]], project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """SPA kanban sections: backlog, unstarted, started, completed, cancelled.
+    If a group is missing, inject a placeholder state so the column still renders.
+    """
+    groups_needed = [
+        ("backlog", "Backlog", 0),
+        ("unstarted", "Todo", 1),
+        ("started", "In Progress", 2),
+        ("completed", "Done", 3),
+        ("cancelled", "Cancelled", 4),
+    ]
+    present = set()
+    for r in rows:
+        g = (r.get("group") or r.get("group_key") or "").lower()
+        if g:
+            present.add(g)
+    # alias mapping
+    aliases = {"todo": "unstarted", "in_progress": "started", "in-progress": "started", "done": "completed", "canceled": "cancelled"}
+    for r in rows:
+        g = (r.get("group") or "").lower()
+        if g in aliases:
+            present.add(aliases[g])
+    out = list(rows)
+    for group, name, seq in groups_needed:
+        if group not in present:
+            out.append(
+                {
+                    "id": f"synthetic-{project_id or 'ws'}-{group}",
+                    "name": name,
+                    "group": group,
+                    "color": "#94a3b8",
+                    "sequence": seq,
+                    "default": group == "backlog",
+                    "project_id": project_id,
+                    "project": project_id,
+                    "description": "",
+                    "is_triage": False,
+                }
+            )
+    return out
 
 def register_commercial_compat(app: FastAPI) -> None:
     @app.get("/api/workspaces/{slug}/permissions/")
@@ -1278,7 +1324,20 @@ def register_commercial_compat(app: FastAPI) -> None:
         if wanted:
             rows = [r for r in rows if str(r.get("id")) in wanted]
 
-        return [_normalize_state_lite(r) for r in rows]
+        normalized = [_normalize_state_lite(r) for r in rows]
+        # When no id filter, ensure group coverage per project
+        if not wanted:
+            by_proj: Dict[str, List[Dict[str, Any]]] = {}
+            for r in normalized:
+                pid = str(r.get("project_id") or r.get("project") or "")
+                by_proj.setdefault(pid, []).append(r)
+            merged: List[Dict[str, Any]] = []
+            for pid, rs in by_proj.items():
+                merged.extend(_ensure_state_groups(rs, pid or None))
+            if merged:
+                return merged
+            return _ensure_state_groups(normalized, None)
+        return normalized
 
     @app.get("/api/workspaces/{slug}/projects/{project_id}/states-lite/")
     async def project_states_lite(slug: str, project_id: str, request: Request):
@@ -1297,6 +1356,7 @@ def register_commercial_compat(app: FastAPI) -> None:
         if wanted:
             rows = [r for r in rows if str(r.get("id")) in wanted]
         out = [_normalize_state_lite(r, project_id) for r in rows]
+        out = _ensure_state_groups(out, project_id)
         return _paginate_results(out)
 
     async def _module_name_map(slug: str, project_id: str, request: Request) -> Dict[str, str]:
@@ -1475,9 +1535,23 @@ def register_commercial_compat(app: FastAPI) -> None:
                 f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/issue-subscribers/",
                 request,
             )
-            if status == 404:
+            if status == 404 or status >= 400:
                 return []
-            return body if status < 400 else JSONResponse(body if isinstance(body, dict) else {"error": str(body)}, status_code=status)
+            # SPA: subscribers.find(e => e === currentUserId) — wants list of user id strings
+            rows = body if isinstance(body, list) else (body.get("results") if isinstance(body, dict) else [])
+            if not isinstance(rows, list):
+                return []
+            ids = []
+            for r in rows:
+                if isinstance(r, str):
+                    ids.append(r)
+                elif isinstance(r, dict):
+                    sid = r.get("subscriber") or r.get("subscriber_id") or r.get("id") or r.get("member")
+                    if isinstance(sid, dict):
+                        sid = sid.get("id")
+                    if sid:
+                        ids.append(str(sid))
+            return ids
         try:
             payload = await request.json()
         except Exception:
@@ -1516,10 +1590,35 @@ def register_commercial_compat(app: FastAPI) -> None:
             status, body, _ = await ce_post(path, request, json_body={})
         else:
             status, body, _ = await ce_delete(path, request)
+        # SPA status() checks data.subscribed; list path uses user ids separately.
+        if request.method == "GET":
+            if status < 400 and isinstance(body, dict):
+                sub = bool(body.get("subscribed") if "subscribed" in body else body.get("is_subscribed"))
+                return {"subscribed": sub, "is_subscribed": sub}
+            # fallback: check subscriber list
+            st2, lst, _ = await ce_get(
+                f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/issue-subscribers/",
+                request,
+            )
+            st_me, me, _ = await ce_get("/api/users/me/", request)
+            uid = str((me or {}).get("id") or "") if isinstance(me, dict) else ""
+            ids = []
+            if st2 == 200:
+                rows = lst if isinstance(lst, list) else (lst.get("results") if isinstance(lst, dict) else [])
+                for r in rows or []:
+                    if isinstance(r, str):
+                        ids.append(r)
+                    elif isinstance(r, dict):
+                        sid = r.get("subscriber") or r.get("id")
+                        if isinstance(sid, dict):
+                            sid = sid.get("id")
+                        if sid:
+                            ids.append(str(sid))
+            sub = uid in ids
+            return {"subscribed": sub, "is_subscribed": sub}
         if status >= 400:
-            # soft-success so SPA subscribe button does not hard-error
             return {"subscribed": request.method != "DELETE", "is_subscribed": request.method != "DELETE"}
-        return body if body not in (None, "") else {"subscribed": request.method != "DELETE", "is_subscribed": request.method != "DELETE"}
+        return {"subscribed": request.method != "DELETE", "is_subscribed": request.method != "DELETE"}
 
     @app.api_route(
         "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/votes/",
@@ -1530,58 +1629,175 @@ def register_commercial_compat(app: FastAPI) -> None:
         methods=["GET", "POST", "DELETE"],
     )
     async def work_item_votes(slug: str, project_id: str, issue_id: str, request: Request):
-        """CE has issue reactions, not votes — map best-effort and never 404."""
+        """Commercial SPA expects a LIST of {vote: 1|-1, actor, actor_detail} (see issue-votes)."""
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        # Prefer CE reactions if present
+
+        key = f"{project_id}:{issue_id}"
+        votes = list(VOTE_STORE.get(key) or [])
+
+        # Resolve current user for actor fields
+        st_me, me, _ = await ce_get("/api/users/me/", request)
+        me = me if isinstance(me, dict) else {}
+        uid = str(me.get("id") or "")
+        actor_detail = {
+            "id": uid,
+            "display_name": me.get("display_name") or me.get("first_name") or me.get("email") or "User",
+            "first_name": me.get("first_name") or "",
+            "last_name": me.get("last_name") or "",
+            "avatar": me.get("avatar") or "",
+            "avatar_url": me.get("avatar_url"),
+        }
+
         if request.method == "GET":
-            status, body, _ = await ce_get(
-                f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/reactions/",
-                request,
-            )
-            if status == 200:
-                return body if body is not None else []
-            return {"up_votes": [], "down_votes": [], "results": [], "vote_count": 0}
+            # Must be a bare array — SPA does s.filter(e => e.vote === 1)
+            return votes
+
+        if request.method == "DELETE":
+            VOTE_STORE[key] = [v for v in votes if str(v.get("actor") or "") != uid]
+            return {"ok": True}
+
+        # POST add/toggle vote
         try:
             payload = await request.json()
         except Exception:
             payload = {}
-        # Map vote to a reaction emoji if possible
-        reaction = "👍" if str(payload.get("vote") or payload.get("value") or "up").lower() in ("1", "up", "upvote", "true") else "👎"
-        if request.method == "POST":
-            status, body, _ = await ce_post(
-                f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/reactions/",
-                request,
-                json_body={"reaction": reaction},
-            )
-            if status >= 400:
-                return {"ok": True, "reaction": reaction}
-            return body if body is not None else {"ok": True}
-        # DELETE
-        status, body, _ = await ce_delete(
-            f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/reactions/{reaction}/",
-            request,
-        )
-        return {"ok": True}
+        raw = payload.get("vote")
+        try:
+            vote_val = int(raw)
+        except Exception:
+            vote_val = 1 if str(raw).lower() in ("1", "up", "upvote", "true") else -1
+        if vote_val not in (1, -1):
+            vote_val = 1 if vote_val > 0 else -1
 
-    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/updates/")
-    @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/updates")
+        # Replace existing vote from this actor
+        votes = [v for v in votes if str(v.get("actor") or "") != uid]
+        votes.append(
+            {
+                "id": str(uuid.uuid4()),
+                "issue": issue_id,
+                "project": project_id,
+                "workspace": slug,
+                "vote": vote_val,
+                "actor": uid,
+                "actor_detail": actor_detail,
+            }
+        )
+        VOTE_STORE[key] = votes
+        return votes[-1]
+
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/updates/",
+        methods=["GET", "POST"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/updates",
+        methods=["GET", "POST"],
+    )
     async def work_item_updates(slug: str, project_id: str, issue_id: str, request: Request):
+        """SPA store does updates.map(e => e.id) — MUST return a bare array of objects with id."""
         err_status, role, err_body = await resolve_membership(slug, request)
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        q = str(request.url.query or "")
-        path = f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/history/"
-        if q:
-            path = f"{path}?{q}"
-        status, body, _ = await ce_get(path, request)
-        if status != 200:
-            # empty updates rather than broken panel
-            return {"results": [], "count": 0, "next_cursor": None, "total_count": 0}
-        if isinstance(body, list):
-            return as_page(body)
-        return body
+
+        key = f"{project_id}:{issue_id}"
+        stored = list(UPDATE_STORE.get(key) or [])
+
+        if request.method == "POST":
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            st_me, me, _ = await ce_get("/api/users/me/", request)
+            me = me if isinstance(me, dict) else {}
+            row = {
+                "id": str(uuid.uuid4()),
+                "issue": issue_id,
+                "project": project_id,
+                "workspace": slug,
+                "created_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+                "updated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+                "created_by": me.get("id"),
+                "created_by_detail": {
+                    "id": me.get("id"),
+                    "display_name": me.get("display_name") or me.get("first_name") or "",
+                },
+                "description_html": payload.get("description_html") or payload.get("description") or "",
+                "description_stripped": payload.get("description_stripped") or "",
+                "status": payload.get("status") or "done",
+                **{k: v for k, v in payload.items() if k not in ("id",)},
+            }
+            stored.insert(0, row)
+            UPDATE_STORE[key] = stored
+            return row
+
+        # GET: merge stored status-updates + CE activity history mapped to update shape
+        out = list(stored)
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/issues/{issue_id}/history/",
+            request,
+        )
+        hist_rows: List[Dict[str, Any]] = []
+        if status == 200:
+            if isinstance(body, list):
+                hist_rows = [x for x in body if isinstance(x, dict)]
+            elif isinstance(body, dict):
+                maybe = body.get("results") or body.get("data") or []
+                if isinstance(maybe, list):
+                    hist_rows = [x for x in maybe if isinstance(x, dict)]
+        for h in hist_rows:
+            hid = h.get("id") or str(uuid.uuid4())
+            out.append(
+                {
+                    "id": str(hid),
+                    "issue": issue_id,
+                    "project": project_id,
+                    "workspace": slug,
+                    "created_at": h.get("created_at") or h.get("timestamp"),
+                    "updated_at": h.get("created_at") or h.get("timestamp"),
+                    "created_by": (h.get("actor_detail") or {}).get("id") if isinstance(h.get("actor_detail"), dict) else h.get("actor"),
+                    "created_by_detail": h.get("actor_detail") or {},
+                    "description_html": h.get("comment_html")
+                    or h.get("description_html")
+                    or f"<p>{h.get('field') or 'updated'} → {h.get('new_value') or h.get('verb') or ''}</p>",
+                    "description_stripped": str(h.get("new_value") or h.get("verb") or h.get("field") or "Update"),
+                    "status": "history",
+                    "source": "history",
+                }
+            )
+        return out
+
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/updates/{update_id}/",
+        methods=["PATCH", "DELETE"],
+    )
+    @app.api_route(
+        "/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/updates/{update_id}",
+        methods=["PATCH", "DELETE"],
+    )
+    async def work_item_update_one(slug: str, project_id: str, issue_id: str, update_id: str, request: Request):
+        err_status, role, err_body = await resolve_membership(slug, request)
+        if err_status is not None:
+            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
+        key = f"{project_id}:{issue_id}"
+        stored = list(UPDATE_STORE.get(key) or [])
+        if request.method == "DELETE":
+            UPDATE_STORE[key] = [u for u in stored if str(u.get("id")) != str(update_id)]
+            return {"ok": True}
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        for i, u in enumerate(stored):
+            if str(u.get("id")) == str(update_id):
+                if isinstance(payload, dict):
+                    stored[i] = {**u, **payload, "id": u.get("id")}
+                UPDATE_STORE[key] = stored
+                return stored[i]
+        return JSONResponse({"error": "not found"}, status_code=404)
 
     @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/pages/")
     @app.get("/api/workspaces/{slug}/projects/{project_id}/work-items/{issue_id}/pages")
@@ -1792,6 +2008,116 @@ def register_commercial_compat(app: FastAPI) -> None:
         return {"id": str(uuid.uuid4()), "status": "completed", "url": None, "ok": True}
 
 
+
+    # ---- User profile tours: force dismissed so SPA stops re-showing onboarding/tours ----
+    @app.get("/api/users/me/profile/")
+    @app.get("/api/users/me/profile")
+    async def users_me_profile_get(request: Request):
+        status, body, _ = await ce_get("/api/users/me/profile/", request)
+        if status == 401:
+            return JSONResponse(
+                body if isinstance(body, dict) else {"detail": "Authentication credentials were not provided."},
+                status_code=401,
+            )
+        if status != 200 or not isinstance(body, dict):
+            # synthesize minimal profile
+            st2, me, _ = await ce_get("/api/users/me/", request)
+            me = me if isinstance(me, dict) else {}
+            body = {"id": me.get("id"), "user": me.get("id")}
+        body = dict(body)
+        body["is_tour_completed"] = True
+        body["is_navigation_tour_completed"] = True
+        body["is_onboarded"] = True
+        body["is_mobile_onboarded"] = True
+        body["onboarding_step"] = {
+            "profile_complete": True,
+            "workspace_create": True,
+            "workspace_invite": True,
+            "workspace_join": True,
+        }
+        body["mobile_onboarding_step"] = {
+            "profile_complete": True,
+            "workspace_create": True,
+            "workspace_join": True,
+        }
+        # All product tour surfaces completed
+        body["product_tour"] = {
+            "work_items": True,
+            "cycles": True,
+            "modules": True,
+            "intake": True,
+            "pages": True,
+            "wiki": True,
+            "ai": True,
+            "projects": True,
+            "home": True,
+            "dismissed": True,
+            "completed": True,
+        }
+        return body
+
+    @app.api_route("/api/users/me/profile/", methods=["PATCH", "PUT", "POST"])
+    @app.api_route("/api/users/me/profile", methods=["PATCH", "PUT", "POST"])
+    async def users_me_profile_write(request: Request):
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        # Force tour completion flags into CE as well
+        payload = {
+            **payload,
+            "is_tour_completed": True,
+            "is_navigation_tour_completed": True,
+            "is_onboarded": True,
+        }
+        status, body, _ = await ce_patch("/api/users/me/profile/", request, json_body=payload)
+        if status >= 400:
+            # still return success shape so SPA dismiss works offline-of-CE
+            return await users_me_profile_get(request)
+        if isinstance(body, dict):
+            body = dict(body)
+            body["is_tour_completed"] = True
+            body["is_navigation_tour_completed"] = True
+            body["is_onboarded"] = True
+            return body
+        return await users_me_profile_get(request)
+
+    @app.post("/api/users/me/tour-completed/")
+    @app.post("/api/users/me/tour-completed")
+    async def users_me_tour_completed(request: Request):
+        status, body, _ = await ce_post("/api/users/me/tour-completed/", request, json_body={})
+        # Also patch profile
+        await ce_patch(
+            "/api/users/me/profile/",
+            request,
+            json_body={"is_tour_completed": True, "is_navigation_tour_completed": True},
+        )
+        return {"ok": True, "is_tour_completed": True}
+
+    @app.get("/api/users/me/")
+    @app.get("/api/users/me")
+    async def users_me_get(request: Request):
+        status, body, _ = await ce_get("/api/users/me/", request)
+        if status != 200:
+            return JSONResponse(
+                body if isinstance(body, dict) else {"detail": "Authentication credentials were not provided."},
+                status_code=status if status else 401,
+            )
+        if isinstance(body, dict):
+            body = dict(body)
+            # Some clients nest profile under user
+            if isinstance(body.get("profile"), dict):
+                p = dict(body["profile"])
+                p["is_tour_completed"] = True
+                p["is_navigation_tour_completed"] = True
+                p["is_onboarded"] = True
+                body["profile"] = p
+            body.setdefault("is_email_verified", True)
+        return body
+
+
     @app.api_route("/api/payments/{path:path}", methods=["GET", "POST", "PATCH", "PUT", "DELETE"])
     async def payments_fallback(path: str, request: Request):
         status, body, _ = await ce_get("/api/users/me/", request)
@@ -1802,6 +2128,9 @@ def register_commercial_compat(app: FastAPI) -> None:
             )
         if path.endswith("current-plan/") or path.endswith("current-plan"):
             return dict(SELFHOST_PLAN)
+        if path.endswith("license-refresh/") or path.endswith("license-refresh"):
+            # SPA refreshWorkspaceCurrentPlan expects plan-shaped body, not {}
+            return dict(SELFHOST_PLAN)
         if path.endswith("flags/") or path.endswith("flags"):
             values = dict((BUSINESS_FLAGS or {}).get("values") or {})
             for k in list(values.keys()):
@@ -1809,4 +2138,4 @@ def register_commercial_compat(app: FastAPI) -> None:
             return {"values": values}
         if request.method == "GET":
             return {}
-        return {"ok": True, "status": "selfhost_stub"}
+        return dict(SELFHOST_PLAN) if "plan" in path or "license" in path else {"ok": True, "status": "selfhost_stub"}

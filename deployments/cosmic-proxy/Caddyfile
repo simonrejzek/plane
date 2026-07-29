@@ -15,6 +15,8 @@
 	reverse_proxy /api/v1/* pi:8080
 	reverse_proxy /cosmic-pilot/* pi:8080
 	reverse_proxy /cosmic-pilot-inject.js pi:8080
+	# Patched English i18n (ICU plurals expanded) — override SPA asset
+	reverse_proxy /assets/en-i18n-fallbacks-v7.js pi:8080
 
 	# Commercial SPA ↔ CE compatibility (hosted on PI).
 	# Each reverse_proxy path is OR'd within its matcher; keep them separate
@@ -81,6 +83,19 @@
 	# Version spoof for mobile app + commercial 3.0 feature gates
 	@instances_spoof path /api/instances/ /api/instances
 	reverse_proxy @instances_spoof pi:8080
+
+	# User profile tours (is_tour_completed, product_tour, onboarding)
+	@users_me_profile path /api/users/me/profile/ /api/users/me/profile
+	reverse_proxy @users_me_profile pi:8080
+
+	@users_me_tour path /api/users/me/tour-completed/ /api/users/me/tour-completed
+	reverse_proxy @users_me_tour pi:8080
+
+	@users_me {
+		method GET
+		path /api/users/me/ /api/users/me
+	}
+	reverse_proxy @users_me pi:8080
 
 	# GET-only wrappers (POST/PATCH/DELETE for modules must stay on CE API)
 	@proj_modules {

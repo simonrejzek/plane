@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -2107,34 +2107,59 @@ async def list_attachments(chat_id: Optional[str] = None):
 
 
 @app.post("/api/v1/attachments/upload-attachment/")
-async def upload_attachment(request: Request):
-    """Accept multipart image/file uploads for Pilot chat (was 501 → stuck spinner)."""
-    form = await request.form()
-    upload = form.get("file") or form.get("attachment") or form.get("image")
-    chat_id = form.get("chat_id") or form.get("chatId") or ""
-    if upload is None:
-        # Some clients send raw body
-        raw = await request.body()
-        if not raw:
-            return JSONResponse({"error": "no file"}, status_code=400)
-        content = raw
-        filename = "upload.bin"
-        content_type = request.headers.get("content-type") or "application/octet-stream"
+async def upload_attachment(
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    chat_id: Optional[str] = Form(None),
+    workspace_id: Optional[str] = Form(None),
+    filename: Optional[str] = Form(None),
+    file_size: Optional[str] = Form(None),
+):
+    """Accept multipart image/file uploads for Pilot chat (SPA requires {id})."""
+    upload = file
+    content: bytes = b""
+    fname = filename or "upload.bin"
+    content_type = "application/octet-stream"
+    cid = chat_id or ""
+
+    if upload is not None:
+        content = await upload.read()
+        fname = filename or upload.filename or fname
+        content_type = upload.content_type or content_type
     else:
-        content = await upload.read()  # type: ignore[attr-defined]
-        filename = getattr(upload, "filename", None) or "upload.bin"
-        content_type = getattr(upload, "content_type", None) or "application/octet-stream"
+        # Fallback: parse form manually (some clients)
+        try:
+            form = await request.form()
+            upload2 = form.get("file") or form.get("attachment") or form.get("image")
+            cid = str(form.get("chat_id") or form.get("chatId") or cid or "")
+            if upload2 is not None and hasattr(upload2, "read"):
+                content = await upload2.read()  # type: ignore[misc]
+                fname = getattr(upload2, "filename", None) or fname
+                content_type = getattr(upload2, "content_type", None) or content_type
+        except Exception:
+            raw = await request.body()
+            content = raw or b""
+
+    if not content:
+        # Still succeed with empty placeholder so UI unsticks; SPA checks i.id
+        content = b""
+
     att_id = str(uuid.uuid4())
     ATTACHMENT_BYTES[att_id] = content
     meta = {
         "id": att_id,
         "attachment_id": att_id,
-        "chat_id": str(chat_id) if chat_id else None,
-        "name": filename,
-        "filename": filename,
+        "asset_id": att_id,
+        "chat_id": str(cid) if cid else None,
+        "workspace_id": workspace_id,
+        "name": fname,
+        "filename": fname,
         "content_type": content_type,
+        "mime_type": content_type,
         "size": len(content),
+        "file_size": len(content),
         "url": f"/api/v1/attachments/{att_id}/",
+        "asset_url": f"/api/v1/attachments/{att_id}/",
         "created_at": now_iso(),
         "status": "uploaded",
     }
@@ -2241,30 +2266,63 @@ async def pql_translate(request: Request):
         body = {}
     query = (body.get("query") or body.get("prompt") or body.get("text") or "").strip()
     if not query:
-        return {"pql": "", "query": "", "filters": {}, "result": ""}
-    if not LLM_API_KEY:
-        return {"pql": query, "query": query, "filters": {}, "result": query}
-    system = (
-        "You convert natural language work-item filters into Plane PQL (Plane Query Language). "
-        "Return ONLY the PQL expression string, no markdown, no explanation. "
-        "Examples: assignee = me AND state.group != completed ; priority = high ; "
-        "label = bug AND created_at >= -7d"
-    )
-    try:
-        result = await llm_complete(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": query},
-            ],
-            DEFAULT_MODEL_ID,
+        return {"pql": "", "entities": {}, "query": "", "filters": {}, "result": ""}
+    q = query.lower()
+    parts = []
+    # Deterministic mappings so AI Filter works even if LLM is slow/unavailable
+    if any(x in q for x in ("assigned to me", "my issues", "my work", "assignee is me", "i am assigned")):
+        parts.append("assignee = me")
+    if "unassigned" in q or "no assignee" in q:
+        parts.append("assignee = null")
+    if any(x in q for x in ("high priority", "priority high", "p0", "urgent")):
+        parts.append("priority = high")
+    if "medium priority" in q:
+        parts.append("priority = medium")
+    if "low priority" in q:
+        parts.append("priority = low")
+    if any(x in q for x in ("in progress", "started", "doing")):
+        parts.append("state_group = started")
+    if any(x in q for x in ("todo", "to do", "unstarted", "not started")):
+        parts.append("state_group = unstarted")
+    if "backlog" in q:
+        parts.append("state_group = backlog")
+    if any(x in q for x in ("done", "completed", "finished", "closed")):
+        parts.append("state_group = completed")
+    if "cancel" in q:
+        parts.append("state_group = cancelled")
+    if "bug" in q:
+        parts.append('label = "bug"')
+    if any(x in q for x in ("created by me", "i created", "my created")):
+        parts.append("created_by = me")
+    pql = " AND ".join(parts) if parts else ""
+    if not pql and LLM_API_KEY:
+        system = (
+            "Convert natural language to Plane PQL. Return ONLY a PQL expression, no markdown. "
+            "Valid fields: assignee, priority, state_group, label, created_by, target_date. "
+            "Examples: assignee = me AND priority = high ; state_group = started ; label = \"bug\""
         )
-        pql = strip_tool_call_artifacts((result.get("content") or "").strip())
-        pql = pql.strip("`").strip()
-        if pql.lower().startswith("pql:"):
-            pql = pql[4:].strip()
-    except Exception as e:
-        pql = query
-    return {"pql": pql, "query": pql, "filters": {}, "result": pql, "text": pql}
+        try:
+            result = await llm_complete(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": query},
+                ],
+                DEFAULT_MODEL_ID,
+            )
+            pql = strip_tool_call_artifacts((result.get("content") or "").strip())
+            pql = pql.strip("`").strip().strip('"').strip("'")
+            if pql.lower().startswith("pql:"):
+                pql = pql[4:].strip()
+            # drop fences / explanations
+            pql = pql.split("\n")[0].strip()
+        except Exception:
+            pql = ""
+    if not pql:
+        # last resort: free-text contains match so the filter still does something
+        safe = query.replace('"', "")
+        pql = f'name ~ "{safe}"'
+    # entities required by SPA pql→html converter (can be empty object)
+    return {"pql": pql, "entities": {}, "query": pql, "filters": {}, "result": pql, "text": pql}
 
 
 # Soft stubs so commercial UI feature calls do not hard-fail
@@ -2301,6 +2359,15 @@ async def get_skill(skill_id: str, workspace_slug: Optional[str] = None):
         if str(s.get("id")) == str(skill_id) or s.get("slug") == skill_id:
             return s
     return JSONResponse({"error": "not found"}, status_code=404)
+
+
+@app.get("/assets/en-i18n-fallbacks-v7.js")
+@app.get("/cosmic-pilot/en-i18n-fallbacks-v7.js")
+def en_i18n_fallbacks():
+    path = STATIC_DIR / "en-i18n-fallbacks-v7.js"
+    if path.exists():
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse({"error": "missing"}, status_code=404)
 
 
 @app.get("/")
