@@ -62,7 +62,8 @@ export const ProjectCard = observer(function ProjectCard(props: Props) {
     EUserPermissionsLevel.WORKSPACE
   );
   // auth
-  const isMemberOfProject = !!project.member_role;
+  // member_role can be 5/15/20; treat only null/undefined as non-member (not falsy 0 alone).
+  const isMemberOfProject = project.member_role !== null && project.member_role !== undefined;
   const hasAdminRole = project.member_role === EUserPermissions.ADMIN;
   const hasMemberRole = project.member_role === EUserPermissions.MEMBER;
   // archive

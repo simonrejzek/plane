@@ -47,7 +47,10 @@ export const IssueDetailsPage = observer(function IssueDetailsPage({ params }: R
   const { getProjectById, getProjectByIdentifier } = useProject();
   const { toggleIssueDetailSidebar, issueDetailSidebarCollapsed } = useAppTheme();
 
-  const [projectIdentifier, sequence_id] = workItem.split("-");
+  // Identifier can contain hyphens; sequence id is always the last segment (e.g. COSMIC-BOOS-17).
+  const workItemParts = workItem.split("-");
+  const sequence_id = workItemParts.pop() || "";
+  const projectIdentifier = workItemParts.join("-");
 
   // fetching issue details
   const { data, isLoading, error } = useSWR<TIssue, Error>(

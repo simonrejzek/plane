@@ -36,10 +36,10 @@ jobs:
           file: apps/web/Dockerfile.web
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/plane-web:shell-v3.6-fix-views
+            ghcr.io/${{ github.repository_owner }}/plane-web:shell-v3.7-fix-projects
             ghcr.io/${{ github.repository_owner }}/plane-web:preview
           build-args: |
-            BUILD_ID=cosmic-shell-v3.6-fix-views
+            BUILD_ID=cosmic-shell-v3.7-fix-projects
             VITE_API_BASE_URL=
             VITE_WEB_BASE_URL=
           cache-from: type=gha
@@ -68,7 +68,7 @@ jobs:
           set -e
           # retag from local buildx cache is hard; re-pull from ghcr with GITHUB_TOKEN then push public
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:shell-v3.6-fix-views
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:shell-v3.6-fix-views ttl.sh/cosmicboosts-plane-web:shell-v3.6-fix-views
-          docker push ttl.sh/cosmicboosts-plane-web:shell-v3.6-fix-views
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:shell-v3.7-fix-projects
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:shell-v3.7-fix-projects ttl.sh/cosmicboosts-plane-web:shell-v3.7-fix-projects
+          docker push ttl.sh/cosmicboosts-plane-web:shell-v3.7-fix-projects
 
