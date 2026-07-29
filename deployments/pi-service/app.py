@@ -1402,8 +1402,79 @@ async def list_artifacts(chat_id: str):
 
 
 @app.get("/api/v1/attachments/chat/")
-async def list_attachments(chat_id: str):
+async def list_attachments(chat_id: Optional[str] = None):
     return {"attachments": []}
+
+
+@app.post("/api/v1/attachments/upload-attachment/")
+async def upload_attachment():
+    return JSONResponse({"error": "File upload not configured on this instance."}, status_code=501)
+
+
+@app.get("/api/v1/chat/search/")
+async def chat_search(
+    request: Request,
+    q: Optional[str] = Query(None),
+    workspace_id: Optional[str] = None,
+):
+    query = (q or "").lower()
+    uk = user_key(request)
+    results = []
+    for c in CHATS.values():
+        if c.get("owner") != uk:
+            continue
+        if workspace_id and c.get("workspace_id") != workspace_id:
+            continue
+        title = c.get("title") or ""
+        if query and query not in title.lower():
+            continue
+        results.append(
+            {
+                "id": c["chat_id"],
+                "title": title,
+                "snippet": title,
+                "match_type": "title",
+                "message_id": None,
+            }
+        )
+    return {"next_cursor": None, "count": len(results), "results": results}
+
+
+# Soft stubs so commercial UI feature calls do not hard-fail
+@app.post("/api/v1/pages/summarize/")
+@app.post("/api/v1/pages-edits/")
+@app.post("/api/v1/pages/blocks/generate/")
+@app.post("/api/v1/pages/blocks/revision/")
+@app.post("/api/v1/wi-desc-edits/")
+@app.post("/api/v1/pql/translate/")
+@app.post("/api/v1/predictions/{entity}/")
+@app.post("/api/v1/dupes/issues/")
+@app.post("/api/v1/dupes/issues/feedback/")
+@app.post("/api/v1/chat-ctas/save-as-page/")
+@app.post("/api/v1/feedback/{usage_type}/")
+async def soft_ai_stub(request: Request, entity: Optional[str] = None, usage_type: Optional[str] = None):
+    return {"ok": True, "status": "unsupported_on_selfhost", "result": None, "items": []}
+
+
+@app.get("/api/v1/pages/blocks/types/")
+@app.get("/api/v1/pages/blocks/revision/types/")
+async def page_block_types():
+    return {"types": []}
+
+
+@app.get("/api/v1/pages/{page_id}/blocks/")
+@app.get("/api/v1/pages/blocks/{block_id}/")
+@app.get("/api/v1/pages/embeds/{embed_id}/")
+async def page_blocks_empty(page_id: Optional[str] = None, block_id: Optional[str] = None, embed_id: Optional[str] = None):
+    return {"blocks": [], "results": []}
+
+
+@app.get("/api/v1/skills/{skill_id}/")
+async def get_skill(skill_id: str, workspace_slug: Optional[str] = None):
+    for s in SKILLS_SEED or []:
+        if str(s.get("id")) == str(skill_id) or s.get("slug") == skill_id:
+            return s
+    return JSONResponse({"error": "not found"}, status_code=404)
 
 
 @app.get("/")
@@ -1415,4 +1486,5 @@ def root():
         "default_model": DEFAULT_MODEL_ID,
         "ui": "/cosmic-pilot/ui",
         "inject": "/cosmic-pilot/inject.js",
+        "mode": "cloud-ui-mirror + local-llm",
     }

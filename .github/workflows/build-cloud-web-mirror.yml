@@ -1,0 +1,56 @@
+name: Build cloud web mirror image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [preview]
+    paths:
+      - "deployments/cloud-web-mirror/**"
+      - ".github/workflows/build-cloud-web-mirror.yml"
+
+jobs:
+  build-mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch commercial assets + build index
+        working-directory: deployments/cloud-web-mirror
+        run: |
+          python3 scripts/patch_assets.py
+          python3 scripts/build_index.py
+          test -f public/index.html
+          # Safety: no remaining cloud PI host in primary bundles
+          ! grep -R "https://pi.plane.so" public/assets/root-*.js public/assets/entry.client-*.js || (echo "PI host still present" && exit 1)
+          ! grep -R "https://api.plane.so" public/assets/root-*.js public/assets/entry.client-*.js || (echo "API host still present" && exit 1)
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: deployments/cloud-web-mirror
+          file: deployments/cloud-web-mirror/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v1
+            ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
+
+      - name: Mirror to ttl.sh
+        run: |
+          set -e
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v1
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v1 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v1
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v1
