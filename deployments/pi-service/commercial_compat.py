@@ -358,14 +358,78 @@ _COMMERCIAL_ONLY_ISSUE_PARAMS = frozenset(
 )
 
 
+# Commercial SPA filter field names → CE ComplexFilterBackend / IssueFilterSet.
+# SPA chips use plural relation names; CE only allows assignee_id / label_id / etc.
+# Sending ``{"assignees":[...]}`` yields 400 ``Filtering on field 'assignees' is
+# not allowed`` and the board paints headers with zero cards.
+_FILTER_FIELD_TO_CE: Dict[str, str] = {
+    "assignees": "assignee_id",
+    "assignee": "assignee_id",
+    "assignee_ids": "assignee_id",
+    "assignees__id": "assignee_id",
+    "labels": "label_id",
+    "label": "label_id",
+    "label_ids": "label_id",
+    "labels__id": "label_id",
+    "state": "state_id",
+    "states": "state_id",
+    "state_ids": "state_id",
+    "cycle": "cycle_id",
+    "cycles": "cycle_id",
+    "module": "module_id",
+    "modules": "module_id",
+    "module_ids": "module_id",
+    "created_by": "created_by_id",
+    "subscribers": "subscriber_id",
+    "subscriber": "subscriber_id",
+    "mentions": "mention_id",
+    "mention": "mention_id",
+    "project": "project_id",
+    "projects": "project_id",
+    "state_group": "state_group",
+    "priority": "priority",
+    "is_archived": "is_archived",
+    "is_draft": "is_draft",
+    # already-CE forms
+    "assignee_id": "assignee_id",
+    "label_id": "label_id",
+    "state_id": "state_id",
+    "cycle_id": "cycle_id",
+    "module_id": "module_id",
+    "created_by_id": "created_by_id",
+    "subscriber_id": "subscriber_id",
+    "mention_id": "mention_id",
+    "project_id": "project_id",
+    "start_date": "start_date",
+    "target_date": "target_date",
+    "created_at": "created_at",
+    "updated_at": "updated_at",
+}
+
+# Commercial-only filter keys CE cannot apply — drop rather than 400 the board.
+_FILTER_FIELDS_DROP = frozenset(
+    {
+        "type",
+        "type_id",
+        "parent_type",
+        "parent_id",
+        "milestone",
+        "milestone_id",
+        "release",
+        "release_id",
+        "team_project",
+    }
+)
+
+
 def sanitize_issue_filters(raw: Any) -> Optional[str]:
     """Normalize commercial SPA `filters` for CE ComplexFilterBackend.
 
-    The Business SPA often sends empty arrays while clearing filter chips, e.g.
-    ``{"state":[]}`` or ``{"priority":[],"labels":[]}``. CE then returns 400
-    ``List value for 'X' must not be empty`` and the board paints blank even
-    though work items exist. Strip empty/null filter fields; drop filters
-    entirely when nothing remains.
+    - Strip empty arrays (CE 400s on empty list filters).
+    - Map commercial field names (``assignees``, ``labels``, ``state``) to CE
+      IssueFilterSet fields (``assignee_id``, ``label_id``, ``state_id``).
+    - Drop commercial-only keys (type / parent_type / milestone / release).
+    - Multi-value lists become ``field__in`` which IssueFilterSet supports.
     """
     if raw is None:
         return None
@@ -387,18 +451,43 @@ def sanitize_issue_filters(raw: Any) -> Optional[str]:
     for fk, fv in parsed.items():
         if fv is None:
             continue
+        key = str(fk)
+        if key in _FILTER_FIELDS_DROP:
+            continue
+        # Already __in / range forms from SPA — remap base then re-suffix
+        suffix = ""
+        base = key
+        for sfx in ("__in", "__exact", "__range", "__gte", "__lte", "__gt", "__lt"):
+            if key.endswith(sfx):
+                base = key[: -len(sfx)]
+                suffix = sfx
+                break
+        if base in _FILTER_FIELDS_DROP:
+            continue
+        mapped = _FILTER_FIELD_TO_CE.get(base)
+        if mapped is None:
+            # Unknown commercial field → drop (do not 400 the board)
+            continue
+        out_key = mapped + suffix
+
         if isinstance(fv, (list, tuple, set)):
             items = [x for x in fv if x is not None and x != ""]
             if not items:
-                # empty array → omit field (CE 400s on empty list filters)
                 continue
-            cleaned[fk] = list(items)
+            # CE list filters use __in
+            if not suffix:
+                out_key = mapped + "__in"
+            # Merge if both singular and plural mapped to same key
+            if out_key in cleaned and isinstance(cleaned[out_key], list):
+                cleaned[out_key] = list(dict.fromkeys([*cleaned[out_key], *items]))
+            else:
+                cleaned[out_key] = list(items)
             continue
         if isinstance(fv, str) and fv.strip() == "":
             continue
         if isinstance(fv, dict) and not fv:
             continue
-        cleaned[fk] = fv
+        cleaned[out_key] = fv
     if not cleaned:
         return None
     return json.dumps(cleaned, separators=(",", ":"))
@@ -686,6 +775,19 @@ _CE_GROUP_TO_ISSUE_KEYS: Dict[str, Tuple[str, ...]] = {
 }
 
 
+def _scalar_group_key(v: Any) -> Optional[str]:
+    """Coerce a single group value to a SPA bucket key string."""
+    if v is None or v == "":
+        return "None"
+    if isinstance(v, dict):
+        if v.get("id") is not None:
+            return str(v["id"])
+        if v.get("pk") is not None:
+            return str(v["pk"])
+        return None
+    return str(v)
+
+
 def _issue_group_keys(issue: Dict[str, Any], group_by: str) -> List[str]:
     """Return group bucket keys for one issue under a CE group_by field."""
     keys = _CE_GROUP_TO_ISSUE_KEYS.get(group_by) or (group_by,)
@@ -702,6 +804,8 @@ def _issue_group_keys(issue: Dict[str, Any], group_by: str) -> List[str]:
         if v is None:
             continue
         if isinstance(v, list):
+            if not v:
+                continue
             values.extend(v)
         elif isinstance(v, dict) and v.get("id") is not None:
             values.append(v.get("id"))
@@ -711,10 +815,9 @@ def _issue_group_keys(issue: Dict[str, Any], group_by: str) -> List[str]:
         return ["None"]
     out: List[str] = []
     for v in values:
-        if v is None or v == "":
-            out.append("None")
-        else:
-            out.append(str(v))
+        sk = _scalar_group_key(v)
+        if sk is not None:
+            out.append(sk)
     # de-dupe preserve order
     seen = set()
     uniq: List[str] = []
@@ -778,19 +881,27 @@ def grouped_response_has_empty_cards(body: Any) -> bool:
         return False
     results = body.get("results")
     if not isinstance(results, dict) or not results:
-        return False
+        # Empty grouped dict while total_count>0 → cards missing entirely
+        try:
+            tc = int(body.get("total_count") or body.get("total_results") or 0)
+        except Exception:
+            tc = 0
+        return tc > 0 and (results == {} or results is None)
     saw_count = False
     saw_rows = False
     empty_with_count = False
+    total_rows = 0
     for bucket in results.values():
         if isinstance(bucket, list):
             if bucket:
                 saw_rows = True
+                total_rows += len(bucket)
             continue
         if not isinstance(bucket, dict):
             continue
         rows = bucket.get("results")
         n_rows = len(rows) if isinstance(rows, list) else 0
+        total_rows += n_rows
         try:
             total = int(bucket.get("total_results") or bucket.get("total_count") or n_rows or 0)
         except Exception:
@@ -805,7 +916,97 @@ def grouped_response_has_empty_cards(body: Any) -> bool:
     if empty_with_count and not saw_rows:
         return True
     # or mixed: some columns empty with counts (still broken for those columns)
-    return empty_with_count and saw_count
+    if empty_with_count and saw_count:
+        return True
+    # totals say work items exist but every bucket is empty
+    try:
+        tc = int(body.get("total_count") or body.get("total_results") or 0)
+    except Exception:
+        tc = 0
+    if tc > 0 and total_rows == 0:
+        return True
+    return False
+
+
+def _extract_issue_items(body: Any) -> List[Dict[str, Any]]:
+    """Flatten issue rows from a CE/PI list or grouped response body."""
+    items: List[Dict[str, Any]] = []
+    if isinstance(body, list):
+        return [x for x in body if isinstance(x, dict)]
+    if not isinstance(body, dict):
+        return items
+    r = body.get("results")
+    if isinstance(r, list):
+        return [x for x in r if isinstance(x, dict)]
+    if isinstance(r, dict):
+        for bucket in r.values():
+            if isinstance(bucket, dict) and isinstance(bucket.get("results"), list):
+                items.extend([x for x in bucket["results"] if isinstance(x, dict)])
+            elif isinstance(bucket, list):
+                items.extend([x for x in bucket if isinstance(x, dict)])
+    return items
+
+
+async def fetch_flat_issues_for_regroup(
+    slug: str,
+    project_id: str,
+    request: Request,
+    base_params: Dict[str, Any],
+    *,
+    max_pages: int = 10,
+    per_page: int = 100,
+) -> List[Dict[str, Any]]:
+    """Page CE flat issues (no group_by) so board regroup has every card."""
+    flat_q = dict(base_params)
+    flat_q.pop("group_by", None)
+    flat_q.pop("sub_group_by", None)
+    flat_q.pop("group_offset", None)
+    flat_q.pop("group_per_page", None)
+    flat_q.pop("sub_group_offset", None)
+    flat_q.pop("sub_group_per_page", None)
+    flat_q["per_page"] = str(per_page)
+    all_items: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    for page in range(max_pages):
+        flat_q["cursor"] = f"{per_page}:{page}:0"
+        st, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/issues/",
+            request,
+            params=flat_q,
+        )
+        if st != 200:
+            # If filters 400, retry once without filters so cards still paint
+            if st == 400 and "filters" in flat_q:
+                flat_q.pop("filters", None)
+                st, body, _ = await ce_get(
+                    f"/api/workspaces/{slug}/projects/{project_id}/issues/",
+                    request,
+                    params=flat_q,
+                )
+            if st != 200:
+                break
+        page_items = _extract_issue_items(body)
+        if not page_items:
+            break
+        for it in page_items:
+            iid = it.get("id")
+            if iid is not None and iid in seen_ids:
+                continue
+            if iid is not None:
+                seen_ids.add(iid)
+            all_items.append(it)
+        # Stop when CE says no next page or short page
+        if isinstance(body, dict):
+            if body.get("next_page_results") is False:
+                break
+            try:
+                if int(body.get("total_count") or 0) <= len(all_items):
+                    break
+            except Exception:
+                pass
+        if len(page_items) < per_page:
+            break
+    return all_items
 
 def enrich_workspace(ws: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(ws)
@@ -1274,14 +1475,15 @@ def register_commercial_compat(app: FastAPI) -> None:
         """Proxy commercial kanban/list board load through PI.
 
         Cleans commercial-only query params, maps group_by aliases to CE allowlist,
-        and normalizes the response for processIssueResponse.
+        maps commercial filter field names, and normalizes for processIssueResponse.
 
         Auth is delegated to CE (cookie/session). We intentionally skip PI
         resolve_membership so a membership-endpoint mismatch cannot blank the board.
 
-        When CE returns grouped buckets with total_results>0 and empty results
-        (global page didn't include those issues), re-fetch a large flat page and
-        regroup so cards actually appear under headers (CosmicBoosts blank board).
+        **Always** materialize cards when group_by is set: CE GroupedOffsetPaginator
+        (and bad commercial filters) produce headers with counts and empty
+        ``results:[]`` — Simon · 21 with zero cards in the DOM. Flat-page +
+        regroup fills every non-empty group with real issue rows.
         """
         q = clean_ce_issue_params(dict(request.query_params))
         group_by = q.get("group_by")
@@ -1290,6 +1492,17 @@ def register_commercial_compat(app: FastAPI) -> None:
             request,
             params=q or None,
         )
+        # CE 400 on unknown commercial filter fields → drop filters and retry
+        if status == 400 and "filters" in q:
+            q_retry = dict(q)
+            q_retry.pop("filters", None)
+            status, body, _ = await ce_get(
+                f"/api/workspaces/{slug}/projects/{project_id}/issues/",
+                request,
+                params=q_retry or None,
+            )
+            if status == 200:
+                q = q_retry
         if status != 200:
             return JSONResponse(
                 body if isinstance(body, (dict, list)) else {"error": str(body)},
@@ -1297,45 +1510,53 @@ def register_commercial_compat(app: FastAPI) -> None:
             )
         out = normalize_issues_list_response(body)
 
-        # Fix "Simon · 21" headers with zero cards: CE grouped page is sparse.
-        if group_by and grouped_response_has_empty_cards(out):
-            flat_q = dict(q)
-            flat_q.pop("group_by", None)
-            flat_q.pop("sub_group_by", None)
-            flat_q["per_page"] = "200"
-            flat_q["cursor"] = "200:0:0"
-            st2, body2, _ = await ce_get(
-                f"/api/workspaces/{slug}/projects/{project_id}/issues/",
-                request,
-                params=flat_q,
+        # When SPA asks for groups: always rebuild buckets from a flat page so
+        # cards exist under every header (do not rely on sparse detection alone).
+        if group_by:
+            need_regroup = (
+                grouped_response_has_empty_cards(out)
+                or isinstance(out.get("results"), list)
+                or (
+                    isinstance(out.get("results"), dict)
+                    and not any(
+                        (
+                            isinstance(b, dict)
+                            and isinstance(b.get("results"), list)
+                            and len(b["results"]) > 0
+                        )
+                        or (isinstance(b, list) and len(b) > 0)
+                        for b in (out.get("results") or {}).values()
+                    )
+                    and int(out.get("total_count") or out.get("total_results") or 0) > 0
+                )
             )
-            if st2 == 200:
-                flat_items: List[Dict[str, Any]] = []
-                if isinstance(body2, list):
-                    flat_items = [x for x in body2 if isinstance(x, dict)]
-                elif isinstance(body2, dict):
-                    r = body2.get("results")
-                    if isinstance(r, list):
-                        flat_items = [x for x in r if isinstance(x, dict)]
-                    elif isinstance(r, dict):
-                        # already grouped — flatten rows
-                        for bucket in r.values():
-                            if isinstance(bucket, dict) and isinstance(bucket.get("results"), list):
-                                flat_items.extend(
-                                    [x for x in bucket["results"] if isinstance(x, dict)]
-                                )
-                            elif isinstance(bucket, list):
-                                flat_items.extend([x for x in bucket if isinstance(x, dict)])
+            # Prefer always-regroup for self-host boards (small). If CE already
+            # returned full rows for every non-zero bucket, skip the extra trip.
+            if not need_regroup and isinstance(out.get("results"), dict):
+                for b in out["results"].values():
+                    if not isinstance(b, dict):
+                        continue
+                    try:
+                        tr = int(b.get("total_results") or 0)
+                    except Exception:
+                        tr = 0
+                    n = len(b.get("results") or []) if isinstance(b.get("results"), list) else 0
+                    # Partial page under a large group → still regroup fully
+                    if tr > n and tr > 0:
+                        need_regroup = True
+                        break
+            if need_regroup:
+                flat_items = await fetch_flat_issues_for_regroup(
+                    slug, project_id, request, q, max_pages=10, per_page=100
+                )
                 if flat_items:
                     out = regroup_issues_by_ce_field(flat_items, str(group_by))
                     out = normalize_issues_list_response(out)
-
-        # Flat list while SPA still has group_by → regroup so columns get rows
-        if group_by and isinstance(out.get("results"), list) and out["results"]:
-            out = regroup_issues_by_ce_field(
-                [x for x in out["results"] if isinstance(x, dict)], str(group_by)
-            )
-            out = normalize_issues_list_response(out)
+            elif isinstance(out.get("results"), list) and out["results"]:
+                out = regroup_issues_by_ce_field(
+                    [x for x in out["results"] if isinstance(x, dict)], str(group_by)
+                )
+                out = normalize_issues_list_response(out)
 
         # Enrich module names so board cards don't flash UUIDs
         try:
@@ -1359,6 +1580,17 @@ def register_commercial_compat(app: FastAPI) -> None:
                             ]
         except Exception:
             pass
+        # Marker so we can confirm this code path is live
+        if isinstance(out, dict):
+            out.setdefault("extra_stats", None)
+            try:
+                es = out.get("extra_stats")
+                if not isinstance(es, dict):
+                    es = {}
+                es["cosmic_board_fix"] = "v42-always-regroup"
+                out["extra_stats"] = es
+            except Exception:
+                pass
         return out
 
     @app.get("/api/workspaces/{slug}/user-work-items/{user_id}/total-count/")

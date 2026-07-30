@@ -1,19 +1,19 @@
 /**
- * Cosmic inject v38 — dual sidebars, board group_by, epic tour, route fixes,
+ * Cosmic inject v39 — dual sidebars, board group_by, epic tour, route fixes,
  * CSS modulepreload fix, faster first paint, CosmicBoosts blank-board recovery.
  * No service workers. No reloads (except one-shot blank-board recovery).
  *
  * Board blank with "Work items N" but empty body:
  * - group_by type/parent_type → no CE columns (if (!groups) return null)
  * - group_by state before states-lite loads → same blank, intermittent
- * Coerce display filters to state; prefetch states-lite into
- * window.__cosmicStateIdsByProject for work-item-layout fallback; one-shot
- * reload if count badge shows with zero issue rows.
+ * - CE sparse groups: headers with total_results, results:[] → zero cards in DOM
+ * Coerce display filters to state; prefetch states-lite; intercept issues
+ * responses and fill empty groups from a flat re-fetch when needed.
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 38;
+  window.__cosmicInjectVersion = 39;
 
   // Kill any SW left from broken experiments
   try {
@@ -321,6 +321,239 @@
     ensureBoardGroupByState(slug, pid);
   }
   runBoardWarmup();
+
+  // ── Client-side board card recovery ──────────────────────────────────
+  // If issues/?group_by=… returns buckets with total_results>0 and empty
+  // results arrays (or total_count>0 with zero rows), processIssueResponse
+  // paints "Simon · 21" headers and zero cards. PI should fix this, but we
+  // also intercept here so a stale PI image still shows cards.
+  function issuesListUrlInfo(url) {
+    try {
+      var u = typeof url === "string" ? url : url && url.url ? String(url.url) : "";
+      if (!u) return null;
+      // absolute or relative
+      var path = u;
+      try {
+        path = new URL(u, location.origin).pathname + new URL(u, location.origin).search;
+      } catch (_) {}
+      if (!/\/api\/workspaces\/[^/]+\/projects\/[^/]+\/issues\/?(\?|$)/.test(path.split("?")[0] + (path.includes("?") ? "?" : ""))) {
+        // simpler check
+        if (path.indexOf("/api/workspaces/") === -1 || path.indexOf("/issues") === -1) return null;
+        if (path.indexOf("/issues/") !== -1 && /\/issues\/[^/?]+/.test(path)) return null; // detail
+      }
+      if (path.indexOf("/total-count") !== -1 || path.indexOf("/meta") !== -1) return null;
+      if (path.indexOf("/issues") === -1) return null;
+      // detail: /issues/{uuid}/
+      if (/\/issues\/[0-9a-f-]{36}/i.test(path)) return null;
+      var qs = "";
+      try {
+        qs = new URL(u, location.origin).search;
+      } catch (_) {
+        var qi = String(u).indexOf("?");
+        qs = qi >= 0 ? String(u).slice(qi) : "";
+      }
+      var params = new URLSearchParams(qs.charAt(0) === "?" ? qs.slice(1) : qs);
+      return {
+        url: u,
+        path: path,
+        groupBy: params.get("group_by"),
+        params: params,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+  function countIssueRowsInBody(data) {
+    if (!data || typeof data !== "object") return 0;
+    var r = data.results;
+    if (Array.isArray(r)) return r.length;
+    if (!r || typeof r !== "object") return 0;
+    var n = 0;
+    Object.keys(r).forEach(function (k) {
+      var b = r[k];
+      if (Array.isArray(b)) n += b.length;
+      else if (b && typeof b === "object" && Array.isArray(b.results)) n += b.results.length;
+    });
+    return n;
+  }
+  function bodyNeedsCardFill(data) {
+    if (!data || typeof data !== "object") return false;
+    var total = Number(data.total_count || data.total_results || 0) || 0;
+    var rows = countIssueRowsInBody(data);
+    if (total > 0 && rows === 0) return true;
+    var r = data.results;
+    if (!r || typeof r !== "object" || Array.isArray(r)) return false;
+    var emptyWithCount = false;
+    Object.keys(r).forEach(function (k) {
+      var b = r[k];
+      if (!b || typeof b !== "object" || Array.isArray(b)) return;
+      var n = Array.isArray(b.results) ? b.results.length : 0;
+      var t = Number(b.total_results || b.total_count || 0) || 0;
+      if (t > 0 && n === 0) emptyWithCount = true;
+    });
+    return emptyWithCount;
+  }
+  function issueGroupKeys(issue, groupBy) {
+    var map = {
+      state_id: ["state_id", "state"],
+      priority: ["priority"],
+      assignees__id: ["assignee_ids", "assignees"],
+      labels__id: ["label_ids", "labels"],
+      created_by: ["created_by"],
+      cycle_id: ["cycle_id", "cycle"],
+      issue_module__module_id: ["module_ids", "modules"],
+      project_id: ["project_id", "project"],
+      state__group: ["state__group"],
+    };
+    // client keys
+    if (groupBy === "state") groupBy = "state_id";
+    if (groupBy === "assignees") groupBy = "assignees__id";
+    if (groupBy === "labels") groupBy = "labels__id";
+    if (groupBy === "cycle") groupBy = "cycle_id";
+    if (groupBy === "module") groupBy = "issue_module__module_id";
+    var keys = map[groupBy] || [groupBy];
+    var values = [];
+    keys.forEach(function (k) {
+      if (k === "state__group") {
+        if (issue.state__group) values.push(issue.state__group);
+        return;
+      }
+      var v = issue[k];
+      if (v == null) return;
+      if (Array.isArray(v)) {
+        v.forEach(function (x) {
+          if (x && typeof x === "object" && x.id != null) values.push(String(x.id));
+          else if (x != null && x !== "") values.push(String(x));
+        });
+      } else if (typeof v === "object" && v.id != null) values.push(String(v.id));
+      else values.push(String(v));
+    });
+    if (!values.length) return ["None"];
+    var seen = {};
+    var out = [];
+    values.forEach(function (x) {
+      if (!seen[x]) {
+        seen[x] = 1;
+        out.push(x);
+      }
+    });
+    return out;
+  }
+  function regroupFlatIssues(items, groupBy) {
+    var buckets = {};
+    (items || []).forEach(function (raw) {
+      if (!raw || typeof raw !== "object") return;
+      var issue = raw;
+      if (issue.id != null) issue = Object.assign({}, issue, { id: String(issue.id) });
+      issueGroupKeys(issue, groupBy).forEach(function (gk) {
+        if (!buckets[gk]) buckets[gk] = [];
+        buckets[gk].push(issue);
+      });
+    });
+    var results = {};
+    var seen = {};
+    var total = 0;
+    Object.keys(buckets).forEach(function (gk) {
+      results[gk] = { results: buckets[gk], total_results: buckets[gk].length };
+      buckets[gk].forEach(function (it) {
+        if (it.id != null && !seen[it.id]) {
+          seen[it.id] = 1;
+          total += 1;
+        }
+      });
+    });
+    return {
+      results: results,
+      total_count: total,
+      total_results: total,
+      count: total,
+      grouped_by: groupBy,
+      next_cursor: null,
+      prev_cursor: null,
+      next_page_results: false,
+      prev_page_results: false,
+      referenced_resources: {},
+      total_groups: Object.keys(results).length,
+      extra_stats: { cosmic_board_fix: "inject-v39-client-regroup" },
+    };
+  }
+  function installIssuesFetchInterceptor() {
+    if (window.__cosmicIssuesFetchPatched) return;
+    window.__cosmicIssuesFetchPatched = true;
+    var origFetch = window.fetch;
+    if (typeof origFetch !== "function") return;
+    window.fetch = function (input, init) {
+      var info = issuesListUrlInfo(input);
+      var p = origFetch.apply(this, arguments);
+      if (!info || !info.groupBy) return p;
+      return p.then(function (res) {
+        if (!res || !res.ok) return res;
+        // Only rewrite JSON list responses
+        var ct = (res.headers && res.headers.get && res.headers.get("content-type")) || "";
+        if (ct && ct.indexOf("json") === -1) return res;
+        return res
+          .clone()
+          .json()
+          .then(function (data) {
+            if (!bodyNeedsCardFill(data)) return res;
+            // Flat re-fetch without group_by
+            var flatParams = new URLSearchParams(info.params.toString());
+            flatParams.delete("group_by");
+            flatParams.delete("sub_group_by");
+            flatParams.delete("group_offset");
+            flatParams.delete("group_per_page");
+            flatParams.set("per_page", "100");
+            flatParams.set("cursor", "100:0:0");
+            var pathOnly = String(info.url).split("?")[0];
+            try {
+              pathOnly = new URL(info.url, location.origin).pathname;
+            } catch (_) {}
+            var flatUrl = pathOnly + "?" + flatParams.toString();
+            return origFetch
+              .call(window, flatUrl, { credentials: "same-origin", headers: (init && init.headers) || {} })
+              .then(function (r2) {
+                if (!r2 || !r2.ok) return res;
+                return r2.json().then(function (flat) {
+                  var items = [];
+                  if (Array.isArray(flat)) items = flat;
+                  else if (flat && Array.isArray(flat.results)) items = flat.results;
+                  else if (flat && flat.results && typeof flat.results === "object") {
+                    Object.keys(flat.results).forEach(function (k) {
+                      var b = flat.results[k];
+                      if (Array.isArray(b)) items = items.concat(b);
+                      else if (b && Array.isArray(b.results)) items = items.concat(b.results);
+                    });
+                  }
+                  if (!items.length) return res;
+                  var fixed = regroupFlatIssues(items, info.groupBy);
+                  // preserve total_count from original if larger
+                  try {
+                    var ot = Number(data.total_count || 0) || 0;
+                    if (ot > fixed.total_count) {
+                      fixed.total_count = ot;
+                      fixed.total_results = ot;
+                    }
+                  } catch (_) {}
+                  return new Response(JSON.stringify(fixed), {
+                    status: 200,
+                    statusText: "OK",
+                    headers: { "content-type": "application/json", "x-cosmic-board-fix": "inject-v39" },
+                  });
+                });
+              })
+              .catch(function () {
+                return res;
+              });
+          })
+          .catch(function () {
+            return res;
+          });
+      });
+    };
+  }
+  try {
+    installIssuesFetchInterceptor();
+  } catch (_) {}
   // SPA client navigations
   try {
     var _ps = history.pushState;

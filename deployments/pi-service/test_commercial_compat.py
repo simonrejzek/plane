@@ -221,7 +221,20 @@ def test_clean_and_normalize_issue_helpers():
     assert sanitize_issue_filters({"priority": [], "labels": []}) is None
     kept = sanitize_issue_filters('{"state":[],"priority":["high","none"]}')
     assert kept is not None
-    assert json.loads(kept) == {"priority": ["high", "none"]}
+    assert json.loads(kept) == {"priority__in": ["high", "none"]}
+
+    # Commercial assignees/labels/state → CE assignee_id / label_id / state_id
+    mapped = sanitize_issue_filters(
+        '{"assignees":["u1","u2"],"labels":["l1"],"state":["s1"]}'
+    )
+    assert mapped is not None
+    assert json.loads(mapped) == {
+        "assignee_id__in": ["u1", "u2"],
+        "label_id__in": ["l1"],
+        "state_id__in": ["s1"],
+    }
+    # Unknown commercial-only keys dropped (do not 400 CE)
+    assert sanitize_issue_filters('{"type":["t1"],"milestone":["m1"]}') is None
 
     q2 = clean_ce_issue_params(
         {
@@ -236,7 +249,7 @@ def test_clean_and_normalize_issue_helpers():
     q3 = clean_ce_issue_params(
         {"filters": '{"state":[],"priority":["urgent"]}', "group_by": "priority"}
     )
-    assert json.loads(q3["filters"]) == {"priority": ["urgent"]}
+    assert json.loads(q3["filters"]) == {"priority__in": ["urgent"]}
     assert q3["group_by"] == "priority"
 
     # Commercial type/parent_type must map to state_id (not drop group_by)
@@ -290,6 +303,8 @@ def test_regroup_issues_fills_empty_group_cards():
         "total_count": 21,
     }
     assert grouped_response_has_empty_cards(sparse) is True
+    # total_count>0 with empty results dict
+    assert grouped_response_has_empty_cards({"results": {}, "total_count": 21}) is True
 
     flat = [
         {"id": "i1", "name": "A", "assignee_ids": ["user-1"], "state_id": "s1"},
@@ -301,6 +316,14 @@ def test_regroup_issues_fills_empty_group_cards():
     assert len(regrouped["results"]["user-1"]["results"]) == 2
     assert regrouped["results"]["user-1"]["total_results"] == 2
     assert grouped_response_has_empty_cards(regrouped) is False
+
+    # Nested assignee objects must become UUID keys (not str(dict))
+    nested = regroup_issues_by_ce_field(
+        [{"id": "x", "assignees": [{"id": "user-9", "display_name": "Simon"}], "state_id": "s1"}],
+        "assignees__id",
+    )
+    assert "user-9" in nested["results"]
+    assert len(nested["results"]["user-9"]["results"]) == 1
 
 
 def test_normalize_projects_list_wraps_ce_array():
@@ -389,11 +412,11 @@ def test_project_issues_list_normalizes_grouped_response():
 def test_project_issues_list_strips_empty_filter_arrays():
     """SPA clear-filter races send filters={"state":[]} which CE 400s — board blanks."""
     app = make_app()
-    seen: Dict[str, Any] = {}
+    calls: list = []
 
     async def mock_ce(path, request, params=None):
         if path.endswith("/issues/") and "total-count" not in path:
-            seen["params"] = dict(params or {})
+            calls.append(dict(params or {}))
             return (
                 200,
                 {
@@ -418,9 +441,16 @@ def test_project_issues_list_strips_empty_filter_arrays():
             },
         )
     assert r.status_code == 200
-    assert r.json()["total_count"] == 1
-    assert "filters" not in seen["params"]
-    assert seen["params"].get("group_by") == "state_id"
+    data = r.json()
+    assert data["total_count"] == 1
+    # First CE call is the grouped request — empty filter arrays stripped
+    assert calls, "expected at least one CE issues call"
+    assert "filters" not in calls[0]
+    assert calls[0].get("group_by") == "state_id"
+    # Cards present under state group after regroup
+    assert "s1" in data["results"]
+    assert data["results"]["s1"]["results"][0]["id"] == "issue-1"
+    assert (data.get("extra_stats") or {}).get("cosmic_board_fix") == "v42-always-regroup"
 
 
 def test_user_work_items_total_count_aliases_user_issues():
