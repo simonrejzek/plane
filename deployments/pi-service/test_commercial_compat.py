@@ -181,6 +181,7 @@ def test_workspace_preferences_hide_dismissed_cards_and_persist(tmp_path, monkey
     assert initial.status_code == 200
     assert initial.json()["tips"]["mobile_app_download"] is True
     assert initial.json()["explored_features"]["ai_chat_tried"] is True
+    assert initial.json()["explored_features"]["epic_migration"] is True
     assert all(initial.json()["getting_started_checklist"].values())
     assert updated.status_code == 200
     assert updated.json()["tips"] == {"mobile_app_download": True, "future_tip": True}

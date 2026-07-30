@@ -1460,6 +1460,7 @@ def register_commercial_compat(app: FastAPI) -> None:
                 "github_integrated": True,
                 "slack_integrated": True,
                 "ai_chat_tried": True,
+                "epic_migration": True,
             },
             "getting_started_checklist": {
                 "project_created": True,
