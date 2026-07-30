@@ -265,6 +265,29 @@ def test_clean_and_normalize_issue_helpers():
     assert prefs["display_filters"]["group_by"] == "state"
     assert prefs["display_filters"]["sub_group_by"] is None
 
+    # Any sub_group_by (e.g. created_by on project /issues/) must be cleared —
+    # single-level boards match modules and flat always-regroup.
+    prefs2 = {
+        "display_filters": {
+            "group_by": "state",
+            "sub_group_by": "created_by",
+            "layout": "kanban",
+        }
+    }
+    coerce_display_filters_group_by(prefs2)
+    assert prefs2["display_filters"]["sub_group_by"] is None
+    assert prefs2["display_filters"]["group_by"] == "state"
+
+    q_sg = clean_ce_issue_params(
+        {
+            "group_by": "state_id",
+            "sub_group_by": "created_by",
+            "layout": "kanban",
+        }
+    )
+    assert "sub_group_by" not in q_sg
+    assert q_sg["group_by"] == "state_id"
+
     body = {
         "results": {
             "s1": {"results": [{"id": "i1", "state_id": "s1"}], "total_results": 2},

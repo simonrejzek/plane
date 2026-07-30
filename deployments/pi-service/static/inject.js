@@ -1,6 +1,6 @@
 /**
- * Cosmic inject v43 — dual sidebars, board group_by, epic tour, route fixes,
- * CSS modulepreload fix, nested sub_group_by regroup for project /issues/.
+ * Cosmic inject v44 — dual sidebars, board group_by, epic tour, route fixes,
+ * CSS modulepreload fix; always drop sub_group_by so /issues/ matches modules.
  * No service workers. No reloads (except one-shot blank-board recovery).
  *
  * Board blank with "Work items N" / "Simon · 21" but empty body:
@@ -10,14 +10,14 @@
  * - page gate !o blanked ListLayout before filters hydrated (web board-mount)
  * - skipBootstrap / ingest sidecar flags must be off on self-host (web patch)
  * - Early DOM mutation (sidebar force, splash) causes React #418 and blank pane
- * - /issues/ with sub_group_by=created_by needs nested buckets; modules OK flat
- * Coerce display filters to state; ensure layout=list; prefetch states-lite;
+ * - /issues/ + sub_group_by blanks cards; modules OK without sub_group → strip it
+ * Coerce display filters to state; drop sub_group_by; prefetch states-lite;
  * intercept issues via fetch AND XHR; fill empty groups from a flat re-fetch.
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 43;
+  window.__cosmicInjectVersion = 44;
 
   // Kill any SW left from broken experiments
   try {
@@ -60,7 +60,9 @@
       df.group_by = "state";
       changed = true;
     }
-    if (isBadGroupBy(df.sub_group_by)) {
+    // Always drop sub_group_by — modules work without it; /issues/ with
+    // sub_group_by=created_by blanks cards under Display/Add.
+    if (df.sub_group_by != null && df.sub_group_by !== "") {
       df.sub_group_by = null;
       changed = true;
     }
@@ -85,7 +87,11 @@
         changed = true;
       }
     }
-    if (Object.prototype.hasOwnProperty.call(node, "sub_group_by") && isBadGroupBy(node.sub_group_by)) {
+    if (
+      Object.prototype.hasOwnProperty.call(node, "sub_group_by") &&
+      node.sub_group_by != null &&
+      node.sub_group_by !== ""
+    ) {
       if (
         Object.prototype.hasOwnProperty.call(node, "layout") ||
         Object.prototype.hasOwnProperty.call(node, "order_by") ||
@@ -278,11 +284,7 @@
           var next = Object.assign({}, data, {
             display_filters: Object.assign({}, df, {
               group_by: "state",
-              sub_group_by:
-                df.sub_group_by === "type" ||
-                df.sub_group_by === "parent_type"
-                  ? null
-                  : df.sub_group_by,
+              sub_group_by: null,
             }),
           });
           var csrf = null;
@@ -787,11 +789,7 @@
           if (typeof df === "object") {
             df.layout = "list";
             df.group_by = "state";
-            if (
-              df.sub_group_by === "type" ||
-              df.sub_group_by === "parent_type"
-            )
-              df.sub_group_by = null;
+            df.sub_group_by = null;
             if (entry.filters.display_filters) entry.filters.display_filters = df;
             if (entry.filters.displayFilters) entry.filters.displayFilters = df;
             found = true;
@@ -1079,7 +1077,7 @@
             if (df.group_by == null || df.group_by === "" || isBadGroupBy(df.group_by)) {
               df.group_by = "state";
             }
-            if (isBadGroupBy(df.sub_group_by)) df.sub_group_by = null;
+            if (df.sub_group_by != null && df.sub_group_by !== "") df.sub_group_by = null;
           } catch (_) {}
         }
         if (kind === "prefs") {

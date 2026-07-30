@@ -335,8 +335,10 @@ def coerce_display_filters_group_by(payload: Any) -> Any:
         gb = df.get("group_by")
         if gb is not None and str(gb) in _UNSUPPORTED_DISPLAY_GROUP_BY:
             df["group_by"] = "state"
-        sgb = df.get("sub_group_by")
-        if sgb is not None and str(sgb) in _UNSUPPORTED_DISPLAY_GROUP_BY:
+        # Self-host always-regroup is single-level (modules path). Commercial
+        # kanban with sub_group_by expects nested buckets; that blanks /issues/
+        # while module boards (no sub_group) still paint. Drop sub-groups.
+        if df.get("sub_group_by") is not None:
             df["sub_group_by"] = None
 
     # Nested containers (filters envelope, arrays of view prefs, etc.)
@@ -533,19 +535,17 @@ def clean_ce_issue_params(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         }
     ) | frozenset(GROUP_BY_CLIENT_TO_CE.values())
 
-    for key in ("group_by", "sub_group_by"):
-        if key not in out:
-            continue
-        raw_val = str(out[key])
+    # Never forward sub_group_by: SPA + flat regroup disagree on shape and
+    # blank the project Work items tray (modules omit sub_group and work).
+    out.pop("sub_group_by", None)
+
+    if "group_by" in out:
+        raw_val = str(out["group_by"])
         mapped = GROUP_BY_CLIENT_TO_CE.get(raw_val, raw_val)
-        # CE allowlist rejection → fall back to state_id for group_by so the
-        # board still paints; drop only unknown sub_group_by.
         if mapped in _CE_GROUP_ALLOWLIST:
-            out[key] = mapped
-        elif key == "group_by":
-            out[key] = "state_id"
+            out["group_by"] = mapped
         else:
-            out.pop(key, None)
+            out["group_by"] = "state_id"
     return out
 
 def _normalize_issue_item(issue: Dict[str, Any]) -> Dict[str, Any]:
