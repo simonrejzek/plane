@@ -1,21 +1,21 @@
 /**
- * Cosmic inject v40 — dual sidebars, board group_by, epic tour, route fixes,
- * CSS modulepreload fix, faster first paint, CosmicBoosts blank-board recovery.
+ * Cosmic inject v41 — dual sidebars, board group_by, epic tour, route fixes,
+ * CSS modulepreload fix, CosmicBoosts blank-board recovery.
  * No service workers. No reloads (except one-shot blank-board recovery).
  *
- * Board blank with "Work items N" but empty body:
+ * Board blank with "Work items N" / "Simon · 21" but empty body:
  * - group_by type/parent_type → no CE columns (if (!groups) return null)
- * - group_by state before states-lite loads → same blank, intermittent
- * - CE sparse groups: headers with total_results, results:[] → zero cards in DOM
- * - skipBootstrap sidecar flag (web store-context) must be false on self-host
- * - XHR intercept must not stringify axios responseType=json bodies
+ * - CE sparse groups: headers with total_results, results:[] → zero cards
+ * - SPA uses axios/XHR for /issues/ — fetch-only intercept never fills cards
+ * - skipBootstrap / ingest sidecar flags must be off on self-host (web patch)
+ * - Early DOM mutation (sidebar force, splash) causes React #418 and blank pane
  * Coerce display filters to state; ensure layout=list; prefetch states-lite;
- * intercept issues responses and fill empty groups from a flat re-fetch.
+ * intercept issues via fetch AND XHR; fill empty groups from a flat re-fetch.
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 40;
+  window.__cosmicInjectVersion = 41;
 
   // Kill any SW left from broken experiments
   try {
@@ -476,8 +476,65 @@
       prev_page_results: false,
       referenced_resources: {},
       total_groups: Object.keys(results).length,
-      extra_stats: { cosmic_board_fix: "inject-v39-client-regroup" },
+      extra_stats: { cosmic_board_fix: "inject-v41-client-regroup" },
     };
+  }
+  function extractIssueItems(flat) {
+    var items = [];
+    if (Array.isArray(flat)) items = flat;
+    else if (flat && Array.isArray(flat.results)) items = flat.results;
+    else if (flat && flat.results && typeof flat.results === "object") {
+      Object.keys(flat.results).forEach(function (k) {
+        var b = flat.results[k];
+        if (Array.isArray(b)) items = items.concat(b);
+        else if (b && Array.isArray(b.results)) items = items.concat(b.results);
+      });
+    }
+    return items;
+  }
+  function flatIssuesUrl(info) {
+    var flatParams = new URLSearchParams(info.params.toString());
+    flatParams.delete("group_by");
+    flatParams.delete("sub_group_by");
+    flatParams.delete("group_offset");
+    flatParams.delete("group_per_page");
+    flatParams.delete("sidecar");
+    flatParams.delete("skip_total_count");
+    flatParams.set("per_page", "100");
+    flatParams.set("cursor", "100:0:0");
+    var pathOnly = String(info.url).split("?")[0];
+    try {
+      pathOnly = new URL(info.url, location.origin).pathname;
+    } catch (_) {}
+    return pathOnly + "?" + flatParams.toString();
+  }
+  function fillSparseIssuesBody(data, info) {
+    if (!bodyNeedsCardFill(data) || !info || !info.groupBy) return null;
+    try {
+      var flatUrl = flatIssuesUrl(info);
+      // Sync XHR so axios/XHR handlers see filled cards on the same turn.
+      // Only runs when group buckets advertise totals with empty results[].
+      var sx = new XMLHttpRequest();
+      sx.open("GET", flatUrl, false);
+      sx.withCredentials = true;
+      sx.setRequestHeader("Accept", "application/json");
+      sx.send(null);
+      if (sx.status < 200 || sx.status >= 300) return null;
+      var flat = JSON.parse(sx.responseText);
+      var items = extractIssueItems(flat);
+      if (!items.length) return null;
+      var fixed = regroupFlatIssues(items, info.groupBy);
+      try {
+        var ot = Number(data.total_count || 0) || 0;
+        if (ot > fixed.total_count) {
+          fixed.total_count = ot;
+          fixed.total_results = ot;
+        }
+      } catch (_) {}
+      return fixed;
+    } catch (_) {
+      return null;
+    }
   }
   function installIssuesFetchInterceptor() {
     if (window.__cosmicIssuesFetchPatched) return;
@@ -490,7 +547,6 @@
       if (!info || !info.groupBy) return p;
       return p.then(function (res) {
         if (!res || !res.ok) return res;
-        // Only rewrite JSON list responses
         var ct = (res.headers && res.headers.get && res.headers.get("content-type")) || "";
         if (ct && ct.indexOf("json") === -1) return res;
         return res
@@ -498,37 +554,15 @@
           .json()
           .then(function (data) {
             if (!bodyNeedsCardFill(data)) return res;
-            // Flat re-fetch without group_by
-            var flatParams = new URLSearchParams(info.params.toString());
-            flatParams.delete("group_by");
-            flatParams.delete("sub_group_by");
-            flatParams.delete("group_offset");
-            flatParams.delete("group_per_page");
-            flatParams.set("per_page", "100");
-            flatParams.set("cursor", "100:0:0");
-            var pathOnly = String(info.url).split("?")[0];
-            try {
-              pathOnly = new URL(info.url, location.origin).pathname;
-            } catch (_) {}
-            var flatUrl = pathOnly + "?" + flatParams.toString();
+            var flatUrl = flatIssuesUrl(info);
             return origFetch
               .call(window, flatUrl, { credentials: "same-origin", headers: (init && init.headers) || {} })
               .then(function (r2) {
                 if (!r2 || !r2.ok) return res;
                 return r2.json().then(function (flat) {
-                  var items = [];
-                  if (Array.isArray(flat)) items = flat;
-                  else if (flat && Array.isArray(flat.results)) items = flat.results;
-                  else if (flat && flat.results && typeof flat.results === "object") {
-                    Object.keys(flat.results).forEach(function (k) {
-                      var b = flat.results[k];
-                      if (Array.isArray(b)) items = items.concat(b);
-                      else if (b && Array.isArray(b.results)) items = items.concat(b.results);
-                    });
-                  }
+                  var items = extractIssueItems(flat);
                   if (!items.length) return res;
                   var fixed = regroupFlatIssues(items, info.groupBy);
-                  // preserve total_count from original if larger
                   try {
                     var ot = Number(data.total_count || 0) || 0;
                     if (ot > fixed.total_count) {
@@ -539,7 +573,10 @@
                   return new Response(JSON.stringify(fixed), {
                     status: 200,
                     statusText: "OK",
-                    headers: { "content-type": "application/json", "x-cosmic-board-fix": "inject-v39" },
+                    headers: {
+                      "content-type": "application/json",
+                      "x-cosmic-board-fix": "inject-v41",
+                    },
                   });
                 });
               })
@@ -553,8 +590,65 @@
       });
     };
   }
+  function installIssuesXhrInterceptor() {
+    if (window.__cosmicIssuesXhrPatched) return;
+    window.__cosmicIssuesXhrPatched = true;
+    try {
+      var XO = XMLHttpRequest.prototype.open;
+      var XS = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (method, url) {
+        try {
+          this.__cosmicIssuesInfo = issuesListUrlInfo(url);
+        } catch (_) {
+          this.__cosmicIssuesInfo = null;
+        }
+        return XO.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.send = function (body) {
+        var x = this;
+        var info = x.__cosmicIssuesInfo;
+        if (info && info.groupBy) {
+          x.addEventListener("readystatechange", function () {
+            if (x.readyState !== 4) return;
+            try {
+              if (x.status < 200 || x.status >= 300) return;
+              var raw = x.responseText;
+              if (!raw || typeof raw !== "string") return;
+              var data = JSON.parse(raw);
+              var fixed = fillSparseIssuesBody(data, info);
+              if (!fixed) return;
+              var t = JSON.stringify(fixed);
+              try {
+                Object.defineProperty(x, "responseText", {
+                  configurable: true,
+                  get: function () {
+                    return t;
+                  },
+                });
+              } catch (_) {}
+              try {
+                Object.defineProperty(x, "response", {
+                  configurable: true,
+                  get: function () {
+                    try {
+                      if (x.responseType === "json") return fixed;
+                    } catch (_) {}
+                    return t;
+                  },
+                });
+              } catch (_) {}
+            } catch (_) {}
+          });
+        }
+        return XS.apply(this, arguments);
+      };
+    } catch (_) {}
+  }
   try {
     installIssuesFetchInterceptor();
+  } catch (_) {}
+  try {
+    installIssuesXhrInterceptor();
   } catch (_) {}
   // SPA client navigations
   try {
@@ -693,11 +787,9 @@
     } catch (_) {}
   }
 
-  // localStorage early (before SPA MobX hydrate).
+  // localStorage early (before SPA MobX hydrate) — safe, no DOM writes.
   expandDualSidebars();
-  // CSS immediately so Projects panel width is correct on first paint (fixes
-  // intermittent blank main / missing panel while waiting for load).
-  injectForceOpenCss();
+  // Defer CSS force until after hydrate (see afterHydration below).
 
   /** Commercial root modulepreloads *.css as scripts → MIME "text/css" errors. */
   function fixCssModulePreloads(root) {
@@ -758,46 +850,58 @@
     } catch (_) {}
   }
 
-  // Drop splash once SPA root mounts so first paint is not a long spinner.
+  // Wait until React has mounted real chrome before touching the DOM.
+  // Early mutations (splash, sidebar widths, clicks) cause React #418 and a
+  // blank work-items pane even when the issues API is healthy.
+  function appChromeReady() {
+    try {
+      return !!(
+        document.getElementById("main-sidebar") ||
+        document.querySelector('a[href*="/projects"]') ||
+        document.querySelector('[data-prevent-nprogress]') ||
+        (document.body &&
+          document.body.innerText &&
+          /Work items|Projects|Overview/i.test(document.body.innerText))
+      );
+    } catch (_) {
+      return false;
+    }
+  }
   function clearSplashSoon() {
     try {
       var d = document.documentElement;
       var tries = 0;
       var t = setInterval(function () {
         tries += 1;
-        var root = document.getElementById("root") || document.querySelector("[data-reactroot]");
-        var hasApp =
-          document.getElementById("main-sidebar") ||
-          document.querySelector('a[href*="/wiki"]') ||
-          (document.body && document.body.innerText && document.body.innerText.length > 80);
-        if (hasApp || tries > 40) {
+        if (appChromeReady() || tries > 60) {
           try {
             d.removeAttribute("data-splash-screen");
           } catch (_) {}
           clearInterval(t);
         }
-      }, 100);
+      }, 150);
     } catch (_) {}
   }
-  clearSplashSoon();
+  // Defer splash clear until after first paint opportunities
+  setTimeout(clearSplashSoon, 800);
 
-  function afterFirstPaint() {
+  function afterHydration() {
     injectForceOpenCss();
     forceMainSidebarDom();
     fixCssModulePreloads(document);
   }
-  // Toggle/DOM nudge shortly after first paint (not only on full load)
-  setTimeout(afterFirstPaint, 50);
-  setTimeout(afterFirstPaint, 400);
+  // Do NOT mutate DOM in the first ~1s (React hydrate window). Then nudge.
+  setTimeout(afterHydration, 1200);
+  setTimeout(afterHydration, 2500);
   if (document.readyState === "complete") {
-    setTimeout(afterFirstPaint, 0);
+    setTimeout(afterHydration, 1500);
   } else {
     window.addEventListener("load", function () {
-      setTimeout(afterFirstPaint, 0);
+      setTimeout(afterHydration, 1200);
     });
   }
 
-  // Keep converting CSS modulepreloads as SPA injects more <link>s
+  // CSS modulepreload fix only — no structural DOM changes during hydrate.
   try {
     if (typeof MutationObserver !== "undefined") {
       var moCss = new MutationObserver(function (muts) {
@@ -1001,33 +1105,37 @@
     });
   } catch (_) {}
 
-  // Re-apply after SPA theme hydrate. No full-page reloads.
+  // Re-apply after SPA theme hydrate. Start after hydrate window.
   var ticks = 0;
-  var timer = setInterval(function () {
-    expandDualSidebars();
-    injectForceOpenCss();
-    forceMainSidebarDom();
-    fixCssModulePreloads(document);
-    ticks += 1;
-    if (ticks >= 48) clearInterval(timer); // ~12s
-  }, 250);
+  setTimeout(function () {
+    var timer = setInterval(function () {
+      expandDualSidebars();
+      injectForceOpenCss();
+      forceMainSidebarDom();
+      fixCssModulePreloads(document);
+      ticks += 1;
+      if (ticks >= 40) clearInterval(timer); // ~10s
+    }, 250);
+  }, 1200);
 
-  // Keep CSS in DOM if SPA rewrites head; re-check panel on navigation
+  // Keep CSS in DOM if SPA rewrites head — only after hydrate
   try {
     if (typeof MutationObserver !== "undefined") {
-      var mo = new MutationObserver(function () {
-        injectForceOpenCss();
-        forceMainSidebarDom();
-      });
-      mo.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-      });
       setTimeout(function () {
-        try {
-          mo.disconnect();
-        } catch (_) {}
-      }, 15000);
+        var mo = new MutationObserver(function () {
+          injectForceOpenCss();
+          forceMainSidebarDom();
+        });
+        mo.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+        });
+        setTimeout(function () {
+          try {
+            mo.disconnect();
+          } catch (_) {}
+        }, 12000);
+      }, 1500);
     }
   } catch (_) {}
 

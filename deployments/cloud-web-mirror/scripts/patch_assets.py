@@ -119,32 +119,55 @@ def fix_css_modulepreloads() -> None:
 
 
 def enable_selfhost_issue_bootstrap() -> None:
-    """Commercial SPA ships skipBootstrap:()=>!0 (sidecar mode).
+    """Commercial SPA ships sidecar-mode flags in store-context.
 
-    With that flag, project-wrapper / layout-main pass a null SWR key so
-    issues, members, labels, and modules never fetch — blank Work items
-    pane with zero /issues/ network calls. Self-host has no sidecar: force
-    skipBootstrap off so boards load.
+    - skipBootstrap:()=>!0 → project-wrapper nulls SWR keys (no members/states/…)
+    - ingest:()=>!0 → every issues request gets sidecar=1 (cloud-only path)
+    - skipTotalCount:()=>!0 → skips total-count (badge can stay 0)
+
+    Self-host has no sidecar: force all three off so boards load and cards
+    paint under group headers.
     """
     n = 0
-    for path in list(ROOT.rglob("store-context*.js")) + list(
-        (ROOT / "releases").rglob("store-context*.js") if (ROOT / "releases").exists() else []
-    ):
+    paths = list(ROOT.rglob("store-context*.js"))
+    rel = ROOT / "releases"
+    if rel.exists():
+        paths += list(rel.rglob("store-context*.js"))
+    # de-dupe
+    seen = set()
+    for path in paths:
+        try:
+            rp = path.resolve()
+        except Exception:
+            rp = path
+        if rp in seen:
+            continue
+        seen.add(rp)
         try:
             raw = path.read_text(encoding="utf-8")
         except Exception:
             continue
-        if "skipBootstrap:()=>!0" not in raw:
-            if "skipBootstrap:()=>!1" in raw:
-                print(f"skipBootstrap already off: {path.name}")
-            continue
-        path.write_text(
-            raw.replace("skipBootstrap:()=>!0", "skipBootstrap:()=>!1"),
-            encoding="utf-8",
+        original = raw
+        raw = raw.replace("skipBootstrap:()=>!0", "skipBootstrap:()=>!1")
+        raw = raw.replace("ingest:()=>!0", "ingest:()=>!1")
+        # Keep skipTotalCount as-is unless we still have the full cloud triad;
+        # turning it off ensures Work items N badge + board count stay in sync.
+        raw = raw.replace(
+            "ug={ingest:()=>!1,skipBootstrap:()=>!1,skipTotalCount:()=>!0}",
+            "ug={ingest:()=>!1,skipBootstrap:()=>!1,skipTotalCount:()=>!1}",
         )
+        raw = raw.replace(
+            "ug={ingest:()=>!0,skipBootstrap:()=>!0,skipTotalCount:()=>!0}",
+            "ug={ingest:()=>!1,skipBootstrap:()=>!1,skipTotalCount:()=>!1}",
+        )
+        if raw == original:
+            if "skipBootstrap:()=>!1" in original:
+                print(f"selfhost bootstrap already applied: {path.name}")
+            continue
+        path.write_text(raw, encoding="utf-8")
         n += 1
-        print(f"skipBootstrap disabled: {path.name}")
-    print(f"skipBootstrap patch files: {n}")
+        print(f"selfhost bootstrap patched: {path.name}")
+    print(f"selfhost bootstrap patch files: {n}")
 
 
 def ensure_board_groups_fallback() -> None:
