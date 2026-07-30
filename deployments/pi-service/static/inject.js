@@ -1,6 +1,6 @@
 /**
- * Cosmic inject v42 — dual sidebars, board group_by, epic tour, route fixes,
- * CSS modulepreload fix, CosmicBoosts blank-board recovery.
+ * Cosmic inject v43 — dual sidebars, board group_by, epic tour, route fixes,
+ * CSS modulepreload fix, nested sub_group_by regroup for project /issues/.
  * No service workers. No reloads (except one-shot blank-board recovery).
  *
  * Board blank with "Work items N" / "Simon · 21" but empty body:
@@ -10,13 +10,14 @@
  * - page gate !o blanked ListLayout before filters hydrated (web board-mount)
  * - skipBootstrap / ingest sidecar flags must be off on self-host (web patch)
  * - Early DOM mutation (sidebar force, splash) causes React #418 and blank pane
+ * - /issues/ with sub_group_by=created_by needs nested buckets; modules OK flat
  * Coerce display filters to state; ensure layout=list; prefetch states-lite;
  * intercept issues via fetch AND XHR; fill empty groups from a flat re-fetch.
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 42;
+  window.__cosmicInjectVersion = 43;
 
   // Kill any SW left from broken experiments
   try {
@@ -360,6 +361,7 @@
         url: u,
         path: path,
         groupBy: params.get("group_by"),
+        subGroupBy: params.get("sub_group_by"),
         params: params,
       };
     } catch (_) {
@@ -375,7 +377,17 @@
     Object.keys(r).forEach(function (k) {
       var b = r[k];
       if (Array.isArray(b)) n += b.length;
-      else if (b && typeof b === "object" && Array.isArray(b.results)) n += b.results.length;
+      else if (b && typeof b === "object") {
+        if (Array.isArray(b.results)) n += b.results.length;
+        else if (b.results && typeof b.results === "object") {
+          // Nested sub_group_by: results[group].results[sub].results[]
+          Object.keys(b.results).forEach(function (sk) {
+            var sub = b.results[sk];
+            if (sub && Array.isArray(sub.results)) n += sub.results.length;
+            else if (Array.isArray(sub)) n += sub.length;
+          });
+        }
+      }
     });
     return n;
   }
@@ -390,7 +402,15 @@
     Object.keys(r).forEach(function (k) {
       var b = r[k];
       if (!b || typeof b !== "object" || Array.isArray(b)) return;
-      var n = Array.isArray(b.results) ? b.results.length : 0;
+      var n = 0;
+      if (Array.isArray(b.results)) n = b.results.length;
+      else if (b.results && typeof b.results === "object") {
+        Object.keys(b.results).forEach(function (sk) {
+          var sub = b.results[sk];
+          if (sub && Array.isArray(sub.results)) n += sub.results.length;
+          else if (Array.isArray(sub)) n += sub.length;
+        });
+      }
       var t = Number(b.total_results || b.total_count || 0) || 0;
       if (t > 0 && n === 0) emptyWithCount = true;
     });
@@ -442,7 +462,63 @@
     });
     return out;
   }
-  function regroupFlatIssues(items, groupBy) {
+  function regroupFlatIssues(items, groupBy, subGroupBy) {
+    var seen = {};
+    var total = 0;
+    // Nested path: SPA getIssueIds(group, sub) needs results[g].results[s].results[]
+    if (subGroupBy) {
+      var nested = {};
+      (items || []).forEach(function (raw) {
+        if (!raw || typeof raw !== "object") return;
+        var issue = raw;
+        if (issue.id != null) issue = Object.assign({}, issue, { id: String(issue.id) });
+        var gks = issueGroupKeys(issue, groupBy);
+        var sgks = issueGroupKeys(issue, subGroupBy);
+        gks.forEach(function (gk) {
+          if (!nested[gk]) nested[gk] = {};
+          sgks.forEach(function (sgk) {
+            if (!nested[gk][sgk]) nested[gk][sgk] = [];
+            nested[gk][sgk].push(issue);
+          });
+        });
+      });
+      var resultsN = {};
+      Object.keys(nested).forEach(function (gk) {
+        var subResults = {};
+        var groupSeen = {};
+        var groupTotal = 0;
+        Object.keys(nested[gk]).forEach(function (sgk) {
+          var iss = nested[gk][sgk];
+          subResults[sgk] = { results: iss, total_results: iss.length };
+          iss.forEach(function (it) {
+            if (it.id != null && !groupSeen[it.id]) {
+              groupSeen[it.id] = 1;
+              groupTotal += 1;
+            }
+            if (it.id != null && !seen[it.id]) {
+              seen[it.id] = 1;
+              total += 1;
+            }
+          });
+        });
+        resultsN[gk] = { results: subResults, total_results: groupTotal };
+      });
+      return {
+        results: resultsN,
+        total_count: total,
+        total_results: total,
+        count: total,
+        grouped_by: groupBy,
+        sub_grouped_by: subGroupBy,
+        next_cursor: null,
+        prev_cursor: null,
+        next_page_results: false,
+        prev_page_results: false,
+        referenced_resources: {},
+        total_groups: Object.keys(resultsN).length,
+        extra_stats: { cosmic_board_fix: "inject-v43-nested-regroup" },
+      };
+    }
     var buckets = {};
     (items || []).forEach(function (raw) {
       if (!raw || typeof raw !== "object") return;
@@ -454,8 +530,6 @@
       });
     });
     var results = {};
-    var seen = {};
-    var total = 0;
     Object.keys(buckets).forEach(function (gk) {
       results[gk] = { results: buckets[gk], total_results: buckets[gk].length };
       buckets[gk].forEach(function (it) {
@@ -471,13 +545,14 @@
       total_results: total,
       count: total,
       grouped_by: groupBy,
+      sub_grouped_by: null,
       next_cursor: null,
       prev_cursor: null,
       next_page_results: false,
       prev_page_results: false,
       referenced_resources: {},
       total_groups: Object.keys(results).length,
-      extra_stats: { cosmic_board_fix: "inject-v41-client-regroup" },
+      extra_stats: { cosmic_board_fix: "inject-v43-client-regroup" },
     };
   }
   function extractIssueItems(flat) {
@@ -524,7 +599,7 @@
       var flat = JSON.parse(sx.responseText);
       var items = extractIssueItems(flat);
       if (!items.length) return null;
-      var fixed = regroupFlatIssues(items, info.groupBy);
+      var fixed = regroupFlatIssues(items, info.groupBy, info.subGroupBy);
       try {
         var ot = Number(data.total_count || 0) || 0;
         if (ot > fixed.total_count) {
@@ -563,7 +638,7 @@
                 return r2.json().then(function (flat) {
                   var items = extractIssueItems(flat);
                   if (!items.length) return res;
-                  var fixed = regroupFlatIssues(items, info.groupBy);
+                  var fixed = regroupFlatIssues(items, info.groupBy, info.subGroupBy);
                   try {
                     var ot = Number(data.total_count || 0) || 0;
                     if (ot > fixed.total_count) {

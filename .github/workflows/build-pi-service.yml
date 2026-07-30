@@ -34,19 +34,16 @@ jobs:
           file: deployments/pi-service/Dockerfile
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v46
             ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v45
-            ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v44
-            ghcr.io/${{ github.repository_owner }}/plane-pi:commercial-compat-v11
             ghcr.io/${{ github.repository_owner }}/plane-pi:preview
 
       - name: Mirror to public ttl.sh
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v45
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v45 ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v45
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v45 ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v44
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v45 ttl.sh/cosmicboosts-plane-pi:commercial-compat-v11
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v46
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v46 ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v46
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-pi:cloud-mirror-v46 ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v45
+          docker push ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v46
           docker push ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v45
-          docker push ttl.sh/cosmicboosts-plane-pi:cloud-mirror-v44
-          docker push ttl.sh/cosmicboosts-plane-pi:commercial-compat-v11

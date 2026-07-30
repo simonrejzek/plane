@@ -325,6 +325,24 @@ def test_regroup_issues_fills_empty_group_cards():
     assert "user-9" in nested["results"]
     assert len(nested["results"]["user-9"]["results"]) == 1
 
+    # sub_group_by=created_by (project Work items kanban) → nested buckets
+    nested_sg = regroup_issues_by_ce_field(
+        [
+            {"id": "i1", "name": "A", "state_id": "s1", "created_by": "u1"},
+            {"id": "i2", "name": "B", "state_id": "s1", "created_by": "u1"},
+            {"id": "i3", "name": "C", "state_id": "s2", "created_by": "u2"},
+        ],
+        "state_id",
+        "created_by",
+    )
+    assert nested_sg["sub_grouped_by"] == "created_by"
+    assert isinstance(nested_sg["results"]["s1"]["results"], dict)
+    assert "u1" in nested_sg["results"]["s1"]["results"]
+    assert len(nested_sg["results"]["s1"]["results"]["u1"]["results"]) == 2
+    assert nested_sg["results"]["s1"]["total_results"] == 2
+    assert len(nested_sg["results"]["s2"]["results"]["u2"]["results"]) == 1
+    assert nested_sg["total_count"] == 3
+
 
 def test_normalize_projects_list_wraps_ce_array():
     from commercial_compat import normalize_projects_list_response

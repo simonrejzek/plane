@@ -72,6 +72,16 @@ def fix_css_modulepreloads() -> None:
 
     Convert ``rel=\"modulepreload\"`` entries that point at .css into stylesheet
     links in HTML, and strip .css entries from JS modulepreload arrays where safe.
+
+    Critical Vite bug (blocks /issues/ ListLayout, modules often already OK):
+    the commercial preload helper does ``t.endsWith(\`.css\`)`` but every mapDeps
+    CSS URL ships with ``?dpl=…``, so endsWith is false → CSS is injected as
+    ``rel=modulepreload as=script`` → browser: "Failed to load module script…
+    MIME type of text/css" → vite:preloadError aborts the dynamic import →
+    Suspense never resolves → ListLayout / base-list never mount → no
+    ``/issues/?group_by=`` fetch and empty card tray under Display/Add.
+    Modules can still look fine when their CSS was already linked as a real
+    stylesheet from the route manifest (preload skipped) or a prior nav.
     """
     fixed = 0
     for path in PUBLIC.rglob("*.html"):
@@ -96,6 +106,72 @@ def fix_css_modulepreloads() -> None:
             path.write_text(updated, encoding="utf-8")
             fixed += n + n2
             print(f"css-modulepreload html: {path.name} ({n + n2})")
+
+    # Vite preload: treat ".css?query" / ".css#hash" as stylesheets, not modules.
+    # Live commercial chunk uses double-quotes inside the template for rel=.
+    old_css_detect = 'let o=t.endsWith(`.css`),s=o?`[rel="stylesheet"]`:``'
+    new_css_detect = 'let o=/\\.css(?:[?#]|$)/.test(t),s=o?`[rel="stylesheet"]`:``'
+    already_marker = "/\\.css(?:[?#]|$)/.test(t)"
+    for path in ROOT.rglob("chunk-IJF3QNGC-*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if already_marker in raw:
+            print(f"vite css-detect already: {path.name}")
+            continue
+        original = raw
+        if old_css_detect in raw:
+            raw = raw.replace(old_css_detect, new_css_detect, 1)
+        elif "endsWith(`.css`)" in raw:
+            raw = raw.replace(
+                "t.endsWith(`.css`)",
+                already_marker,
+                1,
+            )
+        if raw != original:
+            path.write_text(raw, encoding="utf-8")
+            fixed += 1
+            print(f"vite css-detect query-safe: {path.name}")
+        else:
+            print(f"WARN: vite css-detect needle missing in {path.name}")
+
+    # Strip CSS URLs from __vite__mapDeps file lists (belt + suspenders).
+    # Styles already load via route manifest / the fixed stylesheet preload.
+    mapdeps_css = re.compile(
+        r',?"(?:/assets/[^"]+\.css(?:\?[^"]*)?)"'
+    )
+    for path in list(ROOT.rglob("page-*.js")) + list(ROOT.rglob("lazy-*.js")) + list(
+        ROOT.glob("root-*.js")
+    ):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "__vite__mapDeps" not in raw or ".css" not in raw:
+            continue
+        # Only touch the m.f=[...] list near mapDeps, not arbitrary strings.
+        def _strip_css_in_mapdeps(src: str) -> tuple[str, int]:
+            m = re.search(r"(m\.f\|\|\(m\.f=\[)(.*?)(\]\))", src)
+            if not m:
+                m = re.search(r"(m\.f=\[)(.*?)(\])", src)
+            if not m:
+                return src, 0
+            body = m.group(2)
+            new_body, n = mapdeps_css.subn("", body)
+            # clean double commas / leading comma
+            new_body = re.sub(r",{2,}", ",", new_body)
+            new_body = re.sub(r"^,", "", new_body)
+            new_body = re.sub(r",$", "", new_body)
+            if n:
+                src = src[: m.start()] + m.group(1) + new_body + m.group(3) + src[m.end() :]
+            return src, n
+
+        updated, n = _strip_css_in_mapdeps(raw)
+        if n:
+            path.write_text(updated, encoding="utf-8")
+            fixed += n
+            print(f"mapDeps strip css: {path.name} ({n})")
 
     # root-*.js often lists css paths next to js in modulepreload dependency arrays
     for path in ROOT.glob("root-*.js"):

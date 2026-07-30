@@ -828,7 +828,11 @@ def _issue_group_keys(issue: Dict[str, Any], group_by: str) -> List[str]:
     return uniq or ["None"]
 
 
-def regroup_issues_by_ce_field(items: List[Dict[str, Any]], group_by: str) -> Dict[str, Any]:
+def regroup_issues_by_ce_field(
+    items: List[Dict[str, Any]],
+    group_by: str,
+    sub_group_by: Optional[str] = None,
+) -> Dict[str, Any]:
     """Build commercial processIssueResponse buckets from a flat issue list.
 
     CE GroupedOffsetPaginator puts only the *global* page of issues into groups,
@@ -837,7 +841,68 @@ def regroup_issues_by_ce_field(items: List[Dict[str, Any]], group_by: str) -> Di
 
     Self-host boards are small enough that we can fetch a large flat page and
     regroup fully so every non-empty group has its issue rows.
+
+    When ``sub_group_by`` is set (project Work items kanban often uses
+    ``created_by``), the commercial SPA expects **nested** buckets::
+
+        results[groupId].results[subGroupId] = {results: [...], total_results: N}
+
+    Flat ``results[groupId].results = [...]`` with store.subGroupBy set makes
+    ``getIssueIds(group, sub)`` return ``undefined`` → empty /issues/ tray while
+    module boards (no sub_group_by) still paint cards.
     """
+    seen_ids: set = set()
+    if sub_group_by:
+        # Nested: results[gk] = { results: { sgk: {results, total_results} }, total_results }
+        nested: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        for raw in items:
+            if not isinstance(raw, dict):
+                continue
+            issue = _normalize_issue_item(raw)
+            gks = _issue_group_keys(issue, group_by)
+            sgks = _issue_group_keys(issue, sub_group_by)
+            for gk in gks:
+                for sgk in sgks:
+                    nested.setdefault(gk, {}).setdefault(sgk, []).append(issue)
+        results: Dict[str, Any] = {}
+        for gk, sub_map in nested.items():
+            sub_results: Dict[str, Any] = {}
+            group_total = 0
+            group_seen: set = set()
+            for sgk, iss in sub_map.items():
+                sub_results[sgk] = {"results": iss, "total_results": len(iss)}
+                for it in iss:
+                    iid = it.get("id")
+                    if iid is not None and iid not in group_seen:
+                        group_seen.add(iid)
+                        group_total += 1
+                    if iid is not None:
+                        seen_ids.add(iid)
+            results[gk] = {"results": sub_results, "total_results": group_total}
+        total = len(seen_ids)
+        return {
+            "results": results,
+            "total_count": total,
+            "total_results": total,
+            "count": total,
+            "next_cursor": None,
+            "prev_cursor": None,
+            "next_page_results": False,
+            "prev_page_results": False,
+            "grouped_by": group_by,
+            "sub_grouped_by": sub_group_by,
+            "extra_stats": None,
+            "referenced_resources": {},
+            "total_groups": len(results),
+            "next_group_offset": None,
+            "sub_total_groups": sum(
+                len(v.get("results") or {})
+                for v in results.values()
+                if isinstance(v, dict) and isinstance(v.get("results"), dict)
+            ),
+            "sub_next_group_offset": None,
+        }
+
     buckets: Dict[str, List[Dict[str, Any]]] = {}
     for raw in items:
         if not isinstance(raw, dict):
@@ -845,17 +910,13 @@ def regroup_issues_by_ce_field(items: List[Dict[str, Any]], group_by: str) -> Di
         issue = _normalize_issue_item(raw)
         for gk in _issue_group_keys(issue, group_by):
             buckets.setdefault(gk, []).append(issue)
-    results: Dict[str, Any] = {}
-    total = 0
-    seen_ids: set = set()
+    results = {}
     for gk, iss in buckets.items():
         results[gk] = {"results": iss, "total_results": len(iss)}
         for it in iss:
             iid = it.get("id")
-            if iid is not None and iid not in seen_ids:
+            if iid is not None:
                 seen_ids.add(iid)
-                total += 1
-    # unique issue count
     total = len(seen_ids)
     return {
         "results": results,
@@ -1487,6 +1548,7 @@ def register_commercial_compat(app: FastAPI) -> None:
         """
         q = clean_ce_issue_params(dict(request.query_params))
         group_by = q.get("group_by")
+        sub_group_by = q.get("sub_group_by")
         status, body, _ = await ce_get(
             f"/api/workspaces/{slug}/projects/{project_id}/issues/",
             request,
@@ -1512,8 +1574,10 @@ def register_commercial_compat(app: FastAPI) -> None:
 
         # When SPA asks for groups: always rebuild buckets from a flat page so
         # cards exist under every header (do not rely on sparse detection alone).
+        # With sub_group_by the commercial SPA requires nested buckets — always
+        # regroup so /issues/ matches modules (which omit sub_group_by).
         if group_by:
-            need_regroup = (
+            need_regroup = bool(sub_group_by) or (
                 grouped_response_has_empty_cards(out)
                 or isinstance(out.get("results"), list)
                 or (
@@ -1545,16 +1609,26 @@ def register_commercial_compat(app: FastAPI) -> None:
                     if tr > n and tr > 0:
                         need_regroup = True
                         break
+                    # Flat rows while SPA will request sub-groups → re-nest
+                    if sub_group_by and isinstance(b.get("results"), list) and n > 0:
+                        need_regroup = True
+                        break
             if need_regroup:
                 flat_items = await fetch_flat_issues_for_regroup(
                     slug, project_id, request, q, max_pages=10, per_page=100
                 )
                 if flat_items:
-                    out = regroup_issues_by_ce_field(flat_items, str(group_by))
+                    out = regroup_issues_by_ce_field(
+                        flat_items,
+                        str(group_by),
+                        str(sub_group_by) if sub_group_by else None,
+                    )
                     out = normalize_issues_list_response(out)
             elif isinstance(out.get("results"), list) and out["results"]:
                 out = regroup_issues_by_ce_field(
-                    [x for x in out["results"] if isinstance(x, dict)], str(group_by)
+                    [x for x in out["results"] if isinstance(x, dict)],
+                    str(group_by),
+                    str(sub_group_by) if sub_group_by else None,
                 )
                 out = normalize_issues_list_response(out)
 
@@ -1574,6 +1648,16 @@ def register_commercial_compat(app: FastAPI) -> None:
                                 _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x
                                 for x in bucket["results"]
                             ]
+                        elif isinstance(bucket, dict) and isinstance(bucket.get("results"), dict):
+                            # Nested sub_group_by buckets
+                            for sk, sub in list(bucket["results"].items()):
+                                if isinstance(sub, dict) and isinstance(sub.get("results"), list):
+                                    sub["results"] = [
+                                        _enrich_issue_modules(x, mod_map)
+                                        if isinstance(x, dict)
+                                        else x
+                                        for x in sub["results"]
+                                    ]
                         elif isinstance(bucket, list):
                             results[k] = [
                                 _enrich_issue_modules(x, mod_map) if isinstance(x, dict) else x for x in bucket
