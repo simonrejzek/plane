@@ -93,6 +93,7 @@ class WorkspacePageQuery:
         info: Info,
         slug: str,
         cursor: Optional[str] = None,
+        type: Optional[str] = None,
     ) -> PaginatorResponse[PageType]:
         user = info.context.user
         subquery = UserFavorite.objects.filter(
@@ -101,7 +102,7 @@ class WorkspacePageQuery:
             entity_identifier=OuterRef("pk"),
             workspace__slug=slug,
         )
-        pages = await sync_to_async(list)(
+        query = (
             Page.objects.filter(workspace__slug=slug)
             .filter(parent__isnull=True)
             .filter(Q(owned_by=user) | Q(access=0))
@@ -110,6 +111,21 @@ class WorkspacePageQuery:
             .annotate(is_favorite=Exists(subquery))
             .order_by("-updated_at")
         )
+
+        if type == "archived":
+            query = query.filter(archived_at__isnull=False)
+        else:
+            query = query.filter(archived_at__isnull=True)
+            if type == "private":
+                query = query.filter(owned_by=user, access=Page.PRIVATE_ACCESS)
+            elif type == "public":
+                query = query.filter(access=Page.PUBLIC_ACCESS)
+            elif type == "shared":
+                # CE has no workspace-page sharing relation. Returning an
+                # empty category is safer than exposing public pages as shared.
+                query = query.none()
+
+        pages = await sync_to_async(list)(query)
         return paginate(results_object=pages, cursor=cursor)
 
 

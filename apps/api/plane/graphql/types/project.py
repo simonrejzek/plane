@@ -15,6 +15,21 @@ from plane.db.models import Project, ProjectMember, Issue
 from asgiref.sync import sync_to_async
 
 
+@strawberry.type
+class ProjectFeaturesType:
+    """Project feature switches consumed by the official mobile client."""
+
+    module_view: bool
+    cycle_view: bool
+    issue_views_view: bool
+    page_view: bool
+    intake_view: bool
+    guest_view_all_features: bool
+    is_project_updates_enabled: bool = False
+    is_epic_enabled: bool = False
+    is_workflow_enabled: bool = False
+
+
 @strawberry_django.type(Project)
 class ProjectType:
     id: strawberry.ID

@@ -13,7 +13,11 @@ from django.db.models import Exists, OuterRef, Q
 from typing import Optional
 
 # Module Imports
-from plane.graphql.types.project import ProjectType, ProjectMemberType
+from plane.graphql.types.project import (
+    ProjectFeaturesType,
+    ProjectMemberType,
+    ProjectType,
+)
 from plane.db.models import Project, ProjectMember, UserFavorite
 from plane.graphql.permissions.workspace import WorkspaceBasePermission
 from plane.graphql.permissions.project import ProjectBasePermission
@@ -24,6 +28,31 @@ from plane.graphql.bgtasks.recent_visited_task import recent_visited_task
 
 @strawberry.type
 class ProjectQuery:
+    @strawberry.field(
+        name="projectFeatures",
+        extensions=[
+            PermissionExtension(permissions=[ProjectBasePermission()])
+        ],
+    )
+    async def project_features(
+        self,
+        info: Info,
+        slug: str,
+        project: str,
+    ) -> ProjectFeaturesType:
+        project_record = await sync_to_async(
+            Project.objects.get, thread_sensitive=True
+        )(workspace__slug=slug, pk=project, deleted_at__isnull=True)
+
+        return ProjectFeaturesType(
+            module_view=project_record.module_view,
+            cycle_view=project_record.cycle_view,
+            issue_views_view=project_record.issue_views_view,
+            page_view=project_record.page_view,
+            intake_view=project_record.intake_view,
+            guest_view_all_features=project_record.guest_view_all_features,
+        )
+
     @strawberry.field(
         extensions=[
             PermissionExtension(permissions=[WorkspaceBasePermission()])
