@@ -5,7 +5,7 @@
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 30;
+  window.__cosmicInjectVersion = 31;
 
   // Kill any SW left from v28 that could break navigation
   try {
@@ -97,5 +97,12 @@
   try {
     ["plane.product_tour.completed","plane.tour.completed","is_tour_completed","is_navigation_tour_completed","product_tour_dismissed"]
       .forEach(function (k) { try { localStorage.setItem(k, "true"); } catch (_) {} });
+  } catch (_) {}
+
+  // Dual sidebars: if APP_RAIL_${slug} is truthy the SPA treats the icon rail as collapsed/hidden.
+  try {
+    Object.keys(localStorage).forEach(function (k) {
+      if (k.indexOf("APP_RAIL_") === 0) localStorage.removeItem(k);
+    });
   } catch (_) {}
 })();
