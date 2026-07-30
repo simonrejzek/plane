@@ -1,22 +1,31 @@
 /**
- * Cosmic shell inject — NON-DESTRUCTIVE for normal SPA routes.
+ * Cosmic inject — soft fixes only.
  *
- * Critical: commercial mirror wiki-main / pi-chat-main are stubs that
- * `return null`, so /{ws}/wiki and /{ws}/ai-chat paint pure black.
- * We overlay the working PI shells (cosmic-pilot/wiki + /ui) only on those
- * routes, with workspace slug from the URL. Other routes are untouched.
+ * Do NOT overlay custom Wiki/AI shells. The commercial SPA already ships
+ * real Wiki (:workspaceSlug/wiki) and AI (:workspaceSlug/ai-chat) route
+ * modules (layout-CFpI-AZP, page-CvY-jB5L2, pi-chat layouts, etc.).
+ * Overlaying /cosmic-pilot/* replaced app.plane.so UI with a homemade shell.
+ *
+ * This script only:
+ *  - merges fixed English i18n (ICU plurals)
+ *  - marks product tours dismissed
+ *  - soft-fixes raw ICU text that leaks into the DOM
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
 
-  var OVERLAY_ID = "cosmic-shell-overlay";
-  var SHELL_VER = "24";
+  // Remove any leftover overlay from previous inject versions
+  try {
+    var old = document.getElementById("cosmic-shell-overlay");
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    document.documentElement.removeAttribute("data-cosmic-shell");
+  } catch (_) {}
 
   // ---- Fixed English i18n dictionary ----
   (function loadFixedI18n() {
     try {
-      var u = "/cosmic-pilot/en-i18n-fallbacks-v7.js?v=" + SHELL_VER;
+      var u = "/cosmic-pilot/en-i18n-fallbacks-v7.js?v=26";
       fetch(u, { credentials: "same-origin", cache: "no-store" })
         .then(function (r) {
           return r.text();
@@ -86,125 +95,12 @@
     var n = 0;
     var timer = setInterval(function () {
       fixIcuText(document.body);
-      if (++n > 20) clearInterval(timer);
-    }, 2000);
+      // Keep clearing any accidental re-injection of the shell overlay
+      try {
+        var el = document.getElementById("cosmic-shell-overlay");
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+      } catch (_) {}
+      if (++n > 40) clearInterval(timer);
+    }, 1500);
   })();
-
-  // ---- Wiki / AI shell overlay (only when SPA stubs would render null) ----
-  function matchShellRoute() {
-    var path = location.pathname || "";
-    // /{workspace}/wiki[...] or /{workspace}/ai-chat[...]
-    var m = path.match(/^\/([^/]+)\/(wiki|ai-chat)(?:\/|$)/i);
-    if (!m) return null;
-    var slug = m[1];
-    // Skip reserved first segments
-    if (
-      /^(cosmic-pilot|api|assets|auth|god-mode|spaces|m|sign-in|sign-up|accounts)$/i.test(slug)
-    ) {
-      return null;
-    }
-    return { workspace: slug, kind: m[2].toLowerCase() };
-  }
-
-  function shellSrc(route) {
-    var q =
-      "workspace=" +
-      encodeURIComponent(route.workspace) +
-      "&embed=1&v=" +
-      SHELL_VER;
-    if (route.kind === "wiki") {
-      return "/cosmic-pilot/wiki?" + q;
-    }
-    return "/cosmic-pilot/ui?" + q;
-  }
-
-  function removeOverlay() {
-    var el = document.getElementById(OVERLAY_ID);
-    if (el && el.parentNode) el.parentNode.removeChild(el);
-    try {
-      document.documentElement.removeAttribute("data-cosmic-shell");
-    } catch (_) {}
-  }
-
-  function mountOverlay(route) {
-    var src = shellSrc(route);
-    var el = document.getElementById(OVERLAY_ID);
-    if (!el) {
-      el = document.createElement("div");
-      el.id = OVERLAY_ID;
-      // Sit above SPA content but leave browser chrome alone.
-      // Full viewport: SPA wiki/ai stubs paint pure black otherwise.
-      el.style.cssText =
-        "position:fixed;inset:0;z-index:2147483000;background:#f4f5f6;margin:0;padding:0;";
-      document.documentElement.setAttribute("data-cosmic-shell", route.kind);
-      document.body.appendChild(el);
-    }
-    var iframe = el.querySelector("iframe");
-    if (!iframe || iframe.getAttribute("data-src") !== src) {
-      el.innerHTML = "";
-      iframe = document.createElement("iframe");
-      iframe.setAttribute("data-src", src);
-      iframe.src = src;
-      iframe.title = route.kind === "wiki" ? "Wiki" : "Plane AI";
-      iframe.allow = "clipboard-read; clipboard-write";
-      iframe.style.cssText =
-        "border:0;width:100%;height:100%;display:block;background:#f4f5f6;";
-      el.appendChild(iframe);
-    }
-  }
-
-  function syncShell() {
-    try {
-      var route = matchShellRoute();
-      if (!route) {
-        removeOverlay();
-        return;
-      }
-      mountOverlay(route);
-    } catch (e) {
-      console.warn("cosmic shell sync failed", e);
-    }
-  }
-
-  // Hook SPA client-side navigation
-  try {
-    var _push = history.pushState;
-    var _replace = history.replaceState;
-    history.pushState = function () {
-      var r = _push.apply(this, arguments);
-      setTimeout(syncShell, 0);
-      return r;
-    };
-    history.replaceState = function () {
-      var r = _replace.apply(this, arguments);
-      setTimeout(syncShell, 0);
-      return r;
-    };
-    window.addEventListener("popstate", function () {
-      setTimeout(syncShell, 0);
-    });
-  } catch (_) {}
-
-  // Initial + poll (SPA may race)
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", syncShell);
-  } else {
-    syncShell();
-  }
-  setInterval(syncShell, 800);
-
-  // Listen for close messages from pilot shell (optional)
-  window.addEventListener("message", function (ev) {
-    try {
-      if (!ev.data || ev.data.source !== "plane-pilot") return;
-      if (ev.data.type === "close" || ev.data.action === "close") {
-        // Navigate SPA back to workspace home if possible
-        var route = matchShellRoute();
-        if (route) {
-          history.pushState({}, "", "/" + route.workspace + "/");
-          syncShell();
-        }
-      }
-    } catch (_) {}
-  });
 })();

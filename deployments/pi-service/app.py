@@ -1318,6 +1318,52 @@ def wiki_list_pages(slug: str, cursor: Optional[str] = None, per_page: int = 100
     return _wiki_list_payload(_wiki_page_results(slug))
 
 
+# ---- Wiki collections (commercial SPA; empty is valid) ----
+@app.get("/api/workspaces/{slug}/collections/")
+@app.get("/api/workspaces/{slug}/collections")
+def wiki_collections_list(slug: str):
+    """Commercial Wiki collections list — CE has no collections; return empty page."""
+    return _wiki_list_payload([])
+
+
+@app.post("/api/workspaces/{slug}/collections/")
+@app.post("/api/workspaces/{slug}/collections")
+async def wiki_collections_create(slug: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    cid = str(uuid.uuid4())
+    row = {
+        "id": cid,
+        "name": (body.get("name") or "Untitled collection").strip() or "Untitled collection",
+        "description": body.get("description") or "",
+        "workspace": None,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "logo_props": body.get("logo_props") or {},
+        "access": body.get("access", 0),
+        "is_favorite": False,
+        "page_count": 0,
+        "member_count": 0,
+    }
+    return row
+
+
+@app.get("/api/workspaces/{slug}/collections/{collection_id}/")
+@app.get("/api/workspaces/{slug}/collections/{collection_id}")
+def wiki_collection_detail(slug: str, collection_id: str):
+    return JSONResponse({"error": "Collection not found."}, status_code=404)
+
+
+@app.get("/api/workspaces/{slug}/collections/{collection_id}/pages/")
+@app.get("/api/workspaces/{slug}/collections/{collection_id}/pages")
+@app.get("/api/workspaces/{slug}/collections/{collection_id}/members/")
+@app.get("/api/workspaces/{slug}/collections/{collection_id}/members")
+def wiki_collection_children(slug: str, collection_id: str):
+    return _wiki_list_payload([])
+
+
 @app.get("/api/workspaces/{slug}/pages-lite/")
 @app.get("/api/workspaces/{slug}/pages-lite")
 def wiki_pages_lite(slug: str, request: Request):

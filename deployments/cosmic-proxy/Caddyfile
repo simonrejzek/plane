@@ -214,9 +214,8 @@
 	@silo path_regexp ^/api/silo/
 	reverse_proxy @silo pi:8080
 
-	# Wiki pages live on PI (CE lacks workspace-level pages API)
-	# pages, pages-lite, pages-summary, page-labels, favorite-pages
-	@ws_wiki_pages path_regexp ^/api/workspaces/[^/]+/(pages|pages-lite|pages-summary|page-labels|favorite-pages)
+	# Wiki pages + collections live on PI (CE lacks workspace wiki APIs)
+	@ws_wiki_pages path_regexp ^/api/workspaces/[^/]+/(pages|pages-lite|pages-summary|page-labels|favorite-pages|collections)
 	reverse_proxy @ws_wiki_pages pi:8080
 
 	# CE API (projects, issues, modules, labels, worklogs, auth, …)
