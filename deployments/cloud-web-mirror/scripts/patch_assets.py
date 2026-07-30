@@ -147,8 +147,7 @@ def enable_selfhost_issue_bootstrap() -> None:
     print(f"skipBootstrap patch files: {n}")
 
 
-def enable_selfhost_issue_bootstrap()
-    ensure_board_groups_fallback() -> None:
+def ensure_board_groups_fallback() -> None:
     """Prevent blank work-items board when getGroupByColumns returns undefined.
 
     Commercial layout: if (!groups) return null — happens when group_by is type
