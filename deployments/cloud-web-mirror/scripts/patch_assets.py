@@ -300,6 +300,12 @@ def namespace_release_assets() -> None:
             shutil.copy2(source, target)
 
     prefix = f"/assets/releases/{RELEASE}/"
+    # Prior builds (or accidental source pollution) may already embed
+    # /assets/releases/<old-id>/… in mapDeps. A naive replace of "/assets/"
+    # then produces /assets/releases/<new>/releases/<old>/… which 404s and
+    # prevents ListLayout/base-list from loading → blank Work items board.
+    prior_release = re.compile(r"/assets/releases/[^/]+/")
+    prior_release_rel = re.compile(r"(?<![./A-Za-z0-9_-])assets/releases/[^/]+/")
     changed = 0
     for path in PUBLIC.rglob("*"):
         if not path.is_file():
@@ -316,6 +322,9 @@ def namespace_release_assets() -> None:
         except Exception:
             continue
         updated = raw
+        # Collapse any existing release prefix back to plain /assets/ first.
+        updated = prior_release.sub("/assets/", updated)
+        updated = prior_release_rel.sub("assets/", updated)
         # Rewrite each path form once.  The negative lookbehind prevents the
         # final relative-path rule from matching the slash in an absolute URL.
         updated = updated.replace("../assets/", f"../assets/releases/{RELEASE}/")
@@ -333,6 +342,7 @@ def namespace_release_assets() -> None:
     if not marker.exists():
         raise SystemExit(f"ERROR: release asset graph missing {marker}")
     stale_refs = []
+    double_nested = []
     for path in RELEASE_ROOT.rglob("*"):
         if not path.is_file() or path.suffix not in {".js", ".css", ".html", ".json", ".map", ".svg"}:
             continue
@@ -340,11 +350,16 @@ def namespace_release_assets() -> None:
             raw = path.read_text(encoding="utf-8")
             if re.search(rf"/assets/(?!releases/{re.escape(RELEASE)}/)", raw):
                 stale_refs.append(path.relative_to(RELEASE_ROOT))
+            if re.search(r"/assets/releases/[^/]+/releases/", raw):
+                double_nested.append(path.relative_to(RELEASE_ROOT))
         except Exception:
             continue
     if stale_refs:
         sample = ", ".join(map(str, stale_refs[:5]))
         raise SystemExit(f"ERROR: release graph retains unversioned /assets/ refs: {sample}")
+    if double_nested:
+        sample = ", ".join(map(str, double_nested[:5]))
+        raise SystemExit(f"ERROR: double-nested release paths in asset graph: {sample}")
     print(f"release namespace: {RELEASE} ({changed} documents rewritten)")
 
 

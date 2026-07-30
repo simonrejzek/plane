@@ -48,8 +48,8 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v35
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v34
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-${{ github.sha }}
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
 
@@ -91,6 +91,10 @@ jobs:
           ! grep -R -q "ingest:()=>!0" public/assets/store-context*.js
           # Board mount: project page must not require hydrated filters ( !o gate )
           grep -R -l "PROJECT_ISSUES_" public/assets/page-*.js | head -1 | xargs -I{} grep -q '!n||!r?(0,' {}
+          # Double-nested release paths 404 ListLayout (blank Work items board)
+          ! grep -R -l "/assets/releases/.*/releases/" public/assets/releases/"$CLOUD_MIRROR_RELEASE"/*.js \
+            || (echo "double-nested release paths in mapDeps" && exit 1)
+          grep -q "releases/(?<rel>" nginx.conf
           node --check public/assets/sidebar-wrapper-v7tips.js
           # Sidebar bare keys must not be minified 2-letter junk
           grep -q '"drafts":"Drafts"' public/assets/en-i18n-fallbacks-v7.js
@@ -105,8 +109,8 @@ jobs:
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v35
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v35 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v35
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v35 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v33
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v36
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v35
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v36
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v35
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v33
