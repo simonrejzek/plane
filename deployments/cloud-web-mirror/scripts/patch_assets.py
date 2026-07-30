@@ -855,6 +855,29 @@ def ensure_project_issues_board_mount() -> None:
         elif path.name.startswith("page-") and "PROJECT_ISSUES_" in original:
             if "!n||!r?(0,B.jsx)(B.Fragment,{})" in original or 'layout??"list"' in original:
                 print(f"board-mount already: {path.name}")
+
+    # Force layout switcher to always mount a layout (default list)
+    r_old = "function R(e){if(!e.activeLayout)return null;let t=K[e.activeLayout];return t?(0,B.jsx)(z.Suspense,{children:(0,B.jsx)(t,{workspaceSlug:e.workspaceSlug,projectId:e.projectId})}):null}"
+    r_new = "function R(e){let a=e.activeLayout||`list`;let t=K[a]||K.list||K[`list`];if(!t)return null;return(0,B.jsx)(z.Suspense,{children:(0,B.jsx)(t,{workspaceSlug:e.workspaceSlug,projectId:e.projectId})})}"
+    prop_old = "(0,B.jsx)(R,{workspaceSlug:n,projectId:r,activeLayout:s})"
+    prop_new = "(0,B.jsx)(R,{workspaceSlug:n,projectId:r,activeLayout:s||`list`})"
+    for path in ROOT.rglob("page-*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "PROJECT_ISSUES_" not in raw:
+            continue
+        original = raw
+        if r_old in raw:
+            raw = raw.replace(r_old, r_new, 1)
+        if prop_old in raw:
+            raw = raw.replace(prop_old, prop_new, 1)
+        if raw != original:
+            path.write_text(raw, encoding="utf-8")
+            nfiles += 1
+            print(f"layout switcher forced: {path.name}")
+
     print(f"board-mount patch files: {nfiles}")
     # refuse to ship broken store-context
     for path in ROOT.rglob("store-context*.js"):
