@@ -24,26 +24,7 @@
 		reverse_proxy pi:8080
 	}
 	# Patched commercial SPA gate modules (capture) — always from PI, never CF-stale web
-	@ai_gate_assets path_regexp ai_gate ^/assets/(detail-DFXDSk4X|layout-CR1P7wEo|layout-CFpI-AZP|store-context-BZelk5Qy|use-ai-flag-CyOtmqWk|entry\.client-DHb__A1L|toast-etX1DRQn|page-CvY-jB5L2|page-BwDOPCRq2)\.js$
-	handle @ai_gate_assets {
-		header {
-			Cache-Control "no-cache, no-store, must-revalidate"
-			Pragma "no-cache"
-			CDN-Cache-Control "no-store"
-		}
-		rewrite * /cosmic-pilot/static/patched-spa/{re.ai_gate.1}.js
-		reverse_proxy pi:8080
-	}
-	# Explicit patched-spa path (importmap targets this)
-	@patched_spa path_regexp ^/cosmic-pilot/static/patched-spa/
-	handle @patched_spa {
-		header {
-			Cache-Control "no-cache, no-store, must-revalidate"
-			Pragma "no-cache"
-			CDN-Cache-Control "no-store"
-		}
-		reverse_proxy pi:8080
-	}
+
 	reverse_proxy /cosmic-pilot/* pi:8080
 	reverse_proxy /cosmic-pilot-inject.js pi:8080
 	# Patched English i18n (ICU plurals expanded) — override SPA asset.
