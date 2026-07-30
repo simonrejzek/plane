@@ -805,9 +805,45 @@ async def fetch_ce_projects(slug: str, request: Request) -> Tuple[Optional[int],
     status, body, _ = await ce_get(f"/api/workspaces/{slug}/projects/", request)
     if status != 200:
         return status, [], body
+    if isinstance(body, dict) and isinstance(body.get("results"), list):
+        return None, [p for p in body["results"] if isinstance(p, dict)], None
     if not isinstance(body, list):
         return 500, [], {"error": "unexpected projects payload"}
     return None, [p for p in body if isinstance(p, dict)], None
+
+
+def normalize_projects_list_response(body: Any) -> Dict[str, Any]:
+    """Commercial project list (loadFlatPage) expects a page, not a bare CE array.
+
+    SPA does ``const items = response.results`` then hydrates cards. A bare CE
+    list leaves ``results`` undefined → infinite Projects grid skeleton.
+    """
+    if isinstance(body, list):
+        items = [p for p in body if isinstance(p, dict)]
+        return as_page(items)
+    if isinstance(body, dict):
+        out = dict(body)
+        results = out.get("results")
+        if results is None and isinstance(out.get("data"), list):
+            results = out["data"]
+            out["results"] = results
+        if isinstance(results, list):
+            if out.get("total_count") is None:
+                out["total_count"] = out.get("count") or out.get("total_results") or len(results)
+            if out.get("count") is None:
+                out["count"] = len(results)
+            if out.get("next_page_results") is None:
+                out["next_page_results"] = bool(out.get("next_cursor"))
+            if out.get("prev_page_results") is None:
+                out["prev_page_results"] = bool(out.get("prev_cursor"))
+            if "next_cursor" not in out:
+                out["next_cursor"] = None
+            if "prev_cursor" not in out:
+                out["prev_cursor"] = None
+            return out
+        # dict without results → empty page
+        return as_page([])
+    return as_page([])
 
 
 
@@ -966,6 +1002,40 @@ def register_commercial_compat(app: FastAPI) -> None:
             wanted = {x.strip() for x in ids.split(",") if x.strip()}
             lite = [p for p in lite if str(p.get("id")) in wanted]
         return lite
+
+    @app.get("/api/workspaces/{slug}/projects/")
+    @app.get("/api/workspaces/{slug}/projects")
+    async def workspace_projects_list(slug: str, request: Request):
+        """Proxy workspace projects LIST for commercial loadFlatPage.
+
+        CE returns a bare array; SPA needs ``{results, total_count, next_cursor}``.
+        Only the collection path is handled here — project detail stays on CE.
+        """
+        # Pass query params through (per_page, cursor, search, archived, …)
+        q = dict(request.query_params) if request.query_params else None
+        # When SPA asks for group_by, CE ignores it — still return flat page.
+        if q:
+            q.pop("group_by", None)
+            q.pop("sub_group_by", None)
+        status, body, _ = await ce_get(f"/api/workspaces/{slug}/projects/", request, params=q or None)
+        if status != 200:
+            # Fall back to membership-gated list helper
+            st2, projects, err = await fetch_ce_projects(slug, request)
+            if st2 is not None:
+                return JSONResponse(
+                    body if isinstance(body, (dict, list)) else {"error": str(body)},
+                    status_code=status,
+                )
+            return normalize_projects_list_response(projects)
+        return normalize_projects_list_response(body)
+
+    @app.get("/api/workspaces/{slug}/projects/archived/")
+    @app.get("/api/workspaces/{slug}/projects/archived")
+    async def workspace_projects_archived(slug: str, request: Request):
+        status, body, _ = await ce_get(f"/api/workspaces/{slug}/projects/archived/", request)
+        if status != 200:
+            return normalize_projects_list_response([])
+        return normalize_projects_list_response(body)
 
     @app.get("/api/workspaces/{slug}/workspace-project-features/")
     async def workspace_project_features(slug: str, request: Request):
@@ -2445,6 +2515,41 @@ def register_commercial_compat(app: FastAPI) -> None:
     @app.get("/api/workspaces/{slug}/runnerctl/scripts")
     async def runnerctl_scripts_stub(slug: str, request: Request):
         return []
+
+    @app.get("/api/workspaces/{slug}/runnerctl/health/")
+    @app.get("/api/workspaces/{slug}/runnerctl/health")
+    async def runnerctl_health_stub(slug: str, request: Request):
+        """Settings → Runner probes this; CE has no runnerctl."""
+        return {
+            "status": "ok",
+            "healthy": True,
+            "available": False,
+            "message": "Runner not configured on this self-hosted instance",
+        }
+
+    @app.get("/api/workspaces/{slug}/pages/templates/")
+    @app.get("/api/workspaces/{slug}/pages/templates")
+    async def pages_templates_stub(slug: str, request: Request):
+        return []
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/pages/public/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/pages/public")
+    async def project_pages_public_stub(slug: str, project_id: str, request: Request):
+        """Commercial pages list requests public pages collection (CE missing)."""
+        return as_page([])
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/views-lite/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/views-lite")
+    async def project_views_lite(slug: str, project_id: str, request: Request):
+        """Alias commercial views-lite → CE project views list."""
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/views/", request
+        )
+        if status != 200:
+            return []
+        if isinstance(body, dict) and isinstance(body.get("results"), list):
+            return body["results"]
+        return body if isinstance(body, list) else []
 
     # ---- Export / download stubs (SPA expects 200 + file-ish payload, not 404) ----
     @app.api_route(

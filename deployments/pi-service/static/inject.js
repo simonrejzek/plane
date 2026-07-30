@@ -1,5 +1,6 @@
 /**
- * Cosmic inject v36 — dual sidebars + board group_by coerce + epic tour dismiss.
+ * Cosmic inject v37 — dual sidebars, board group_by, epic tour, route fixes,
+ * CSS modulepreload fix, faster first paint.
  * No service workers. No reloads. No import maps. No module remaps.
  *
  * Keeps APP_RAIL on (icon rail) and forces the Projects panel expanded.
@@ -9,7 +10,7 @@
  * `app_sidebar_collapsed`. After that, rewriting localStorage alone does
  * nothing — ResizableSidebar keeps `#main-sidebar` at width 0. We therefore
  * (1) keep the storage key false, (2) block setItem(true), (3) force the
- * real #main-sidebar open via CSS + optional toggle click (after hydrate).
+ * real #main-sidebar open via CSS immediately + toggle after first paint.
  *
  * Board blank with "Work items N": commercial SPA group_by type/parent_type
  * needs work-item-types (CE empty) / parent_type always void 0 →
@@ -17,11 +18,17 @@
  * Coerce those display filters to "state" in localStorage + user-properties.
  *
  * Epics walkthrough: preferences must include explored_features.epic_migration.
+ *
+ * MIME errors: commercial root modulepreloads AppProgressBar-*.css as a script;
+ * convert those links to rel=stylesheet.
+ *
+ * SPA 404 paths: bare /projects/:id → /issues/; /workspace-drafts → /drafts/;
+ * bare /profile → /profile/:userId when known.
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 36;
+  window.__cosmicInjectVersion = 37;
 
   // Kill any SW left from broken experiments
   try {
@@ -241,20 +248,130 @@
     } catch (_) {}
   }
 
-  // localStorage early (before SPA MobX hydrate). DOM/CSS force waits so we
-  // don't fight React hydration (minified error #418 text mismatches).
+  // localStorage early (before SPA MobX hydrate).
   expandDualSidebars();
-  function afterHydrateShell() {
+  // CSS immediately so Projects panel width is correct on first paint (fixes
+  // intermittent blank main / missing panel while waiting for load).
+  injectForceOpenCss();
+
+  /** Commercial root modulepreloads *.css as scripts → MIME "text/css" errors. */
+  function fixCssModulePreloads(root) {
+    try {
+      var scope = root || document;
+      var links = scope.querySelectorAll
+        ? scope.querySelectorAll('link[rel="modulepreload"]')
+        : [];
+      for (var i = 0; i < links.length; i++) {
+        var href = links[i].getAttribute("href") || "";
+        if (/\.css(\?|#|$)/i.test(href)) {
+          links[i].setAttribute("rel", "stylesheet");
+          links[i].removeAttribute("as");
+          links[i].removeAttribute("crossorigin");
+        }
+      }
+    } catch (_) {}
+  }
+  fixCssModulePreloads(document);
+
+  /** Map dead CE/self-host URLs onto commercial SPA routes. */
+  function fixClientRoutes() {
+    try {
+      var path = location.pathname || "";
+      // /{ws}/projects/{uuid} → issues (commercial uses /overview or /issues)
+      var m = path.match(
+        /^\/([^/]+)\/projects\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i
+      );
+      if (m) {
+        location.replace("/" + m[1] + "/projects/" + m[2] + "/issues/");
+        return true;
+      }
+      m = path.match(/^\/([^/]+)\/workspace-drafts\/?$/i);
+      if (m) {
+        location.replace("/" + m[1] + "/drafts/");
+        return true;
+      }
+      m = path.match(/^\/([^/]+)\/profile\/?$/i);
+      if (m) {
+        var uid = null;
+        try {
+          uid = localStorage.getItem("cosmic_user_id");
+        } catch (_) {}
+        if (uid) {
+          location.replace("/" + m[1] + "/profile/" + uid + "/");
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+  if (fixClientRoutes()) return;
+
+  // Capture user id for /profile redirects
+  function rememberUserId(data) {
+    try {
+      if (data && data.id) localStorage.setItem("cosmic_user_id", String(data.id));
+    } catch (_) {}
+  }
+
+  // Drop splash once SPA root mounts so first paint is not a long spinner.
+  function clearSplashSoon() {
+    try {
+      var d = document.documentElement;
+      var tries = 0;
+      var t = setInterval(function () {
+        tries += 1;
+        var root = document.getElementById("root") || document.querySelector("[data-reactroot]");
+        var hasApp =
+          document.getElementById("main-sidebar") ||
+          document.querySelector('a[href*="/wiki"]') ||
+          (document.body && document.body.innerText && document.body.innerText.length > 80);
+        if (hasApp || tries > 40) {
+          try {
+            d.removeAttribute("data-splash-screen");
+          } catch (_) {}
+          clearInterval(t);
+        }
+      }, 100);
+    } catch (_) {}
+  }
+  clearSplashSoon();
+
+  function afterFirstPaint() {
     injectForceOpenCss();
     forceMainSidebarDom();
+    fixCssModulePreloads(document);
   }
+  // Toggle/DOM nudge shortly after first paint (not only on full load)
+  setTimeout(afterFirstPaint, 50);
+  setTimeout(afterFirstPaint, 400);
   if (document.readyState === "complete") {
-    setTimeout(afterHydrateShell, 0);
+    setTimeout(afterFirstPaint, 0);
   } else {
     window.addEventListener("load", function () {
-      setTimeout(afterHydrateShell, 0);
+      setTimeout(afterFirstPaint, 0);
     });
   }
+
+  // Keep converting CSS modulepreloads as SPA injects more <link>s
+  try {
+    if (typeof MutationObserver !== "undefined") {
+      var moCss = new MutationObserver(function (muts) {
+        for (var i = 0; i < muts.length; i++) {
+          var nodes = muts[i].addedNodes || [];
+          for (var j = 0; j < nodes.length; j++) {
+            var n = nodes[j];
+            if (n && n.nodeType === 1) fixCssModulePreloads(n);
+          }
+        }
+      });
+      moCss.observe(document.documentElement, { childList: true, subtree: true });
+      setTimeout(function () {
+        try {
+          moCss.disconnect();
+        } catch (_) {}
+      }, 20000);
+    }
+  } catch (_) {}
 
   // Soft-force critical flags (APP_RAIL must stay true for icon rail)
   // + coerce type/parent_type group_by on user-properties responses
@@ -270,6 +387,7 @@
       // Project/cycle/module/workspace user-properties hold display_filters.group_by
       if (u.indexOf("/user-properties") !== -1) return "userprops";
       if (/\/api\/workspaces\/[^/]+\/preferences\/?(\?|$)/.test(u)) return "prefs";
+      if (/\/api\/users\/me\/?(\?|$)/.test(u) && u.indexOf("/profile") === -1) return "me";
       return null;
     }
     function ensureEpicExplored(data) {
@@ -290,6 +408,8 @@
         if (kind === "features") {
           data.is_pi_enabled = true;
           data.is_wiki_enabled = true;
+          // Keep project list on flat page (no commercial group_by groups API)
+          data.is_project_grouping_enabled = false;
           return data;
         }
         if (kind === "flags") {
@@ -298,12 +418,17 @@
           data.values.APP_RAIL = true;
           data.values.WORKSPACE_PAGES = true;
           data.values.PI_CHAT = true;
+          // Avoid commercial project-list grouping path
+          data.values.PROJECT_GROUPING = false;
         }
         if (kind === "userprops") {
           coerceGroupByDeep(data);
         }
         if (kind === "prefs") {
           ensureEpicExplored(data);
+        }
+        if (kind === "me") {
+          rememberUserId(data);
         }
       } catch (_) {}
       return data;
@@ -412,16 +537,14 @@
   } catch (_) {}
 
   // Re-apply after SPA theme hydrate. No full-page reloads.
-  // Start after first paint so React can hydrate without our forced width.
   var ticks = 0;
   var timer = setInterval(function () {
     expandDualSidebars();
-    if (document.readyState === "complete" || ticks > 2) {
-      injectForceOpenCss();
-      forceMainSidebarDom();
-    }
+    injectForceOpenCss();
+    forceMainSidebarDom();
+    fixCssModulePreloads(document);
     ticks += 1;
-    if (ticks >= 40) clearInterval(timer); // ~10s
+    if (ticks >= 48) clearInterval(timer); // ~12s
   }, 250);
 
   // Keep CSS in DOM if SPA rewrites head; re-check panel on navigation

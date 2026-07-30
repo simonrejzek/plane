@@ -67,6 +67,57 @@ def patch_text(text: str) -> tuple[str, int]:
 
 
 
+def fix_css_modulepreloads() -> None:
+    """Commercial root/manifest modulepreloads *.css as scripts → browser MIME errors.
+
+    Convert ``rel=\"modulepreload\"`` entries that point at .css into stylesheet
+    links in HTML, and strip .css entries from JS modulepreload arrays where safe.
+    """
+    fixed = 0
+    for path in PUBLIC.rglob("*.html"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        updated, n = re.subn(
+            r'<link\s+rel="modulepreload"\s+([^>]*href="[^"]+\.css[^"]*"[^>]*)/?>',
+            r'<link rel="stylesheet" \1/>',
+            raw,
+            flags=re.I,
+        )
+        # also href-first order
+        updated, n2 = re.subn(
+            r'<link\s+([^>]*href="[^"]+\.css[^"]*"[^>]*)\s+rel="modulepreload"([^>]*)/?>',
+            r'<link rel="stylesheet" \1\2/>',
+            updated,
+            flags=re.I,
+        )
+        if n or n2:
+            path.write_text(updated, encoding="utf-8")
+            fixed += n + n2
+            print(f"css-modulepreload html: {path.name} ({n + n2})")
+
+    # root-*.js often lists css paths next to js in modulepreload dependency arrays
+    for path in ROOT.glob("root-*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if ".css" not in raw or "AppProgressBar" not in raw:
+            continue
+        # Remove quoted css URLs from arrays: ,"/assets/AppProgressBar-xxx.css?dpl=..."
+        updated, n = re.subn(
+            r',?"/assets/[^"]+\.css(?:\?[^"]*)?"',
+            "",
+            raw,
+        )
+        if n:
+            path.write_text(updated, encoding="utf-8")
+            fixed += n
+            print(f"css-modulepreload js: {path.name} ({n})")
+    print(f"css-modulepreload total fixes: {fixed}")
+
+
 def ensure_epic_migration_fallbacks() -> None:
     """Commercial SPA expects product_tour.epic_migration.* — self-host may miss that ns.
     Keep English copy fallbacks so users never see raw i18n key strings."""
@@ -302,7 +353,10 @@ def main() -> int:
     print(f"ai-selfhost surgical: {ai_n}")
     ensure_lazy_module_fallback()
     ensure_epic_migration_fallbacks()
+    fix_css_modulepreloads()
     namespace_release_assets()
+    # re-apply after namespace so release copies also drop css modulepreloads
+    fix_css_modulepreloads()
     return 0
 
 

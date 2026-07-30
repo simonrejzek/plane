@@ -65,6 +65,19 @@
 	@ws_projects_lite path_regexp ^/api/workspaces/[^/]+/projects-lite/?$
 	reverse_proxy @ws_projects_lite pi:8080
 
+	# Workspace projects LIST only (not /projects/{id}/…) — wrap CE array for SPA
+	@ws_projects_list {
+		method GET
+		path_regexp ^/api/workspaces/[^/]+/projects/?$
+	}
+	reverse_proxy @ws_projects_list pi:8080
+
+	@ws_projects_archived {
+		method GET
+		path_regexp ^/api/workspaces/[^/]+/projects/archived/?$
+	}
+	reverse_proxy @ws_projects_archived pi:8080
+
 	@ws_preferences path_regexp ^/api/workspaces/[^/]+/preferences/?$
 	reverse_proxy @ws_preferences pi:8080
 
@@ -219,6 +232,16 @@
 	# Wiki pages + collections live on PI (CE lacks workspace wiki APIs)
 	@ws_wiki_pages path_regexp ^/api/workspaces/[^/]+/(pages|pages-lite|pages-summary|page-labels|favorite-pages|collections)
 	reverse_proxy @ws_wiki_pages pi:8080
+
+	# Page templates + project public pages (commercial paths missing on CE)
+	@ws_pages_templates path_regexp ^/api/workspaces/[^/]+/pages/templates/?$
+	reverse_proxy @ws_pages_templates pi:8080
+
+	@proj_pages_public path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/pages/public/?$
+	reverse_proxy @proj_pages_public pi:8080
+
+	@proj_views_lite path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/views-lite/?$
+	reverse_proxy @proj_views_lite pi:8080
 
 	# CE API (projects, issues, modules, labels, worklogs, auth, …)
 	reverse_proxy /api/* api:8000

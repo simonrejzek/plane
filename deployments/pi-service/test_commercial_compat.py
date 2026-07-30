@@ -273,6 +273,25 @@ def test_clean_and_normalize_issue_helpers():
     assert flat["results"]["All Issues"]["results"][0]["id"] == "a"
     assert flat["total_count"] == 1
 
+
+
+def test_normalize_projects_list_wraps_ce_array():
+    from commercial_compat import normalize_projects_list_response
+
+    page = normalize_projects_list_response(
+        [{"id": "p1", "name": "Demo"}, {"id": "p2", "name": "B"}]
+    )
+    assert page["results"][0]["id"] == "p1"
+    assert page["total_count"] == 2
+    assert page["next_page_results"] is False
+    # already paged shape is preserved
+    paged = normalize_projects_list_response(
+        {"results": [{"id": "x"}], "total_count": 9, "next_cursor": "c1", "next_page_results": True}
+    )
+    assert paged["total_count"] == 9
+    assert paged["next_cursor"] == "c1"
+
+
 def test_workspace_preferences_dismiss_epic_migration():
     """EpicMigrationModal opens unless explored_features.epic_migration is true."""
     app = make_app()
