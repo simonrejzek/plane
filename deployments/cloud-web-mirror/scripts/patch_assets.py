@@ -503,7 +503,7 @@ def ensure_project_issues_board_mount() -> None:
     # PROJECT fetchFilters: wrap await user-properties so store still hydrates
     filter_needles = [
         (
-            "fetchFilters=async(e,t)=>{let n=await this.rootIssueStore.rootStore.memberViewState.fetchProjectUserProperties(e,t),r=this.computedDisplayFilters(n?.display_filters),i=this.computedDisplayProperties(n?.display_properties),a={group_by:[],sub_group_by:[]},o=this.rootIssueStore.currentUserId;if(o){let n=this.handleIssuesLocalFilters.get(m.PROJECT,e,t,o);a.group_by=n?.kanban_filters?.group_by||[],a.sub_group_by=n?.kanban_filters?.sub_group_by||[]}C(()=>{j(this.filters,[t],{richFilters:n?.rich_filters||{},pqlFilters:n?.pql_filters||qe,lastUsedFilterType:n?.last_used_filter,displayFilters:r,displayProperties:i,kanbanFilters:a})})",
+            "fetchFilters=async(e,t)=>{let n=await this.rootIssueStore.rootStore.memberViewState.fetchProjectUserProperties(e,t),r=this.computedDisplayFilters(n?.display_filters),i=this.computedDisplayProperties(n?.display_properties),a={group_by:[],sub_group_by:[]},o=this.rootIssueStore.currentUserId;if(o){let n=this.handleIssuesLocalFilters.get(m.PROJECT,e,t,o);a.group_by=n?.kanban_filters?.group_by||[],a.sub_group_by=n?.kanban_filters?.sub_group_by||[]}C(()=>{j(this.filters,[t],{richFilters:n?.rich_filters||{},pqlFilters:n?.pql_filters||qe,lastUsedFilterType:n?.last_used_filter,displayFilters:r,displayProperties:i,kanbanFilters:a})})};",
             "fetchFilters=async(e,t)=>{let n;try{n=await this.rootIssueStore.rootStore.memberViewState.fetchProjectUserProperties(e,t)}catch(err){n=null}if(!n||typeof n!==`object`)n={display_filters:{layout:`list`,group_by:`state`,order_by:`-created_at`},display_properties:{},rich_filters:{},pql_filters:qe};if(!n.display_filters||typeof n.display_filters!==`object`)n.display_filters={};if(!n.display_filters.layout)n.display_filters.layout=`list`;if(n.display_filters.group_by==null||n.display_filters.group_by===``)n.display_filters.group_by=`state`;let r=this.computedDisplayFilters(n?.display_filters),i=this.computedDisplayProperties(n?.display_properties),a={group_by:[],sub_group_by:[]},o=this.rootIssueStore.currentUserId;if(o){let n=this.handleIssuesLocalFilters.get(m.PROJECT,e,t,o);a.group_by=n?.kanban_filters?.group_by||[],a.sub_group_by=n?.kanban_filters?.sub_group_by||[]}C(()=>{j(this.filters,[t],{richFilters:n?.rich_filters||{},pqlFilters:n?.pql_filters||qe,lastUsedFilterType:n?.last_used_filter,displayFilters:r,displayProperties:i,kanbanFilters:a})})}",
         ),
     ]
@@ -558,6 +558,14 @@ def ensure_project_issues_board_mount() -> None:
             if "!n||!r?(0,B.jsx)(B.Fragment,{})" in original or 'layout??"list"' in original:
                 print(f"board-mount already: {path.name}")
     print(f"board-mount patch files: {nfiles}")
+    # refuse to ship broken store-context
+    for path in ROOT.rglob("store-context*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if raw.count("{") != raw.count("}"):
+            raise SystemExit(f"ERROR: brace imbalance in {path}")
 
 
 def main() -> int:
