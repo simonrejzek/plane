@@ -19,9 +19,11 @@ def test_inject_source_forces_dual_sidebars() -> None:
     assert 'app_sidebar_collapsed", "false"' in text
     assert "sidebarWidth" in text
     assert "JSON.stringify(250)" in text
-    assert "location.reload" not in text
+    # one-shot blank-board recovery may call reload once; no importmap remaps
     assert "importmap" not in text
-    assert "__cosmicInjectVersion = 37" in text
+    assert "__cosmicInjectVersion = 38" in text
+    assert "cosmicStateIdsByProject" in text or "__cosmicStateIdsByProject" in text
+    assert "blankBoardRecovery" in text or "blank_board" in text
     assert "cosmic-force-projects-sidebar" in text
     assert "main-sidebar" in text
     # Board blank fix: commercial type/parent_type group_by must be coerced
@@ -36,7 +38,7 @@ def test_index_early_prefs_and_inject_version() -> None:
     assert "cosmic-dual-sidebar-prefs" in html
     assert 'app_sidebar_collapsed", "false"' in html
     assert "sidebarWidth" in html
-    assert re.search(r"inject\.js\?v=37", html)
+    assert re.search(r"inject\.js\?v=38", html)
     assert html.find("cosmic-dual-sidebar-prefs") < html.find("entry.client")
 
 def test_execute_inject_sets_localstorage_keys() -> None:
@@ -109,11 +111,18 @@ def test_execute_inject_sets_localstorage_keys() -> None:
           sessionStorage: ls,
           document,
           documentElement,
+          location: { pathname: "/agenttestws/projects/abc/issues/", reload() {} },
           addEventListener() {},
           dispatchEvent() { return true; },
           __cosmicShellInjected: false,
         };
+        global.location = global.window.location;
         global.document = document;
+        global.fetch = () => Promise.resolve({ ok: false, json: async () => null });
+        global.history = {
+          pushState() {},
+          replaceState() {},
+        };
         global.CustomEvent = function CustomEvent() {};
         global.Event = function Event() {};
         global.MutationObserver = function () { this.observe = () => {}; this.disconnect = () => {}; };
@@ -178,7 +187,7 @@ def test_execute_inject_sets_localstorage_keys() -> None:
     assert out["collapsed"] == "false", out
     assert json.loads(out["width"]) == 250, out
     assert out["hasRailKey"] is False, out
-    assert out["version"] == 37, out
+    assert out["version"] == 38, out
     assert out["forceCss"] is True, out
     assert out["groupBy"] == "state", out
     assert out["subGroupBy"] is None, out

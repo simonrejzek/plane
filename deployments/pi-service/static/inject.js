@@ -1,34 +1,19 @@
 /**
- * Cosmic inject v37 — dual sidebars, board group_by, epic tour, route fixes,
- * CSS modulepreload fix, faster first paint.
- * No service workers. No reloads. No import maps. No module remaps.
+ * Cosmic inject v38 — dual sidebars, board group_by, epic tour, route fixes,
+ * CSS modulepreload fix, faster first paint, CosmicBoosts blank-board recovery.
+ * No service workers. No reloads (except one-shot blank-board recovery).
  *
- * Keeps APP_RAIL on (icon rail) and forces the Projects panel expanded.
- *
- * Why CSS/DOM as well as localStorage:
- * The commercial SPA hydrates MobX `sidebarCollapsed` once from
- * `app_sidebar_collapsed`. After that, rewriting localStorage alone does
- * nothing — ResizableSidebar keeps `#main-sidebar` at width 0. We therefore
- * (1) keep the storage key false, (2) block setItem(true), (3) force the
- * real #main-sidebar open via CSS immediately + toggle after first paint.
- *
- * Board blank with "Work items N": commercial SPA group_by type/parent_type
- * needs work-item-types (CE empty) / parent_type always void 0 →
- * getGroupByColumns returns undefined → if (!groups) return null.
- * Coerce those display filters to "state" in localStorage + user-properties.
- *
- * Epics walkthrough: preferences must include explored_features.epic_migration.
- *
- * MIME errors: commercial root modulepreloads AppProgressBar-*.css as a script;
- * convert those links to rel=stylesheet.
- *
- * SPA 404 paths: bare /projects/:id → /issues/; /workspace-drafts → /drafts/;
- * bare /profile → /profile/:userId when known.
+ * Board blank with "Work items N" but empty body:
+ * - group_by type/parent_type → no CE columns (if (!groups) return null)
+ * - group_by state before states-lite loads → same blank, intermittent
+ * Coerce display filters to state; prefetch states-lite into
+ * window.__cosmicStateIdsByProject for work-item-layout fallback; one-shot
+ * reload if count badge shows with zero issue rows.
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 37;
+  window.__cosmicInjectVersion = 38;
 
   // Kill any SW left from broken experiments
   try {
@@ -194,6 +179,231 @@
 
   // Fix any already-persisted type/parent_type grouping before SPA hydrates.
   coerceIssueLocalFiltersStorage();
+
+  // CosmicBoosts blank-board recovery helpers (states + group_by)
+  window.__cosmicStateIdsByProject = window.__cosmicStateIdsByProject || {};
+  function projectIdFromPath() {
+    try {
+      var path =
+        (typeof location !== "undefined" && location.pathname) ||
+        (window.location && window.location.pathname) ||
+        "";
+      var m = path.match(
+        /\/projects\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+      );
+      return m ? m[1] : null;
+    } catch (_) {
+      return null;
+    }
+  }
+  function workspaceSlugFromPath() {
+    try {
+      var path =
+        (typeof location !== "undefined" && location.pathname) ||
+        (window.location && window.location.pathname) ||
+        "";
+      var p = path.split("/").filter(Boolean);
+      return p[0] || null;
+    } catch (_) {
+      return null;
+    }
+  }
+  function prefetchProjectStates(slug, projectId) {
+    if (!slug || !projectId) return;
+    if (window.__cosmicStateIdsByProject[projectId] && window.__cosmicStateIdsByProject[projectId].length)
+      return;
+    var url =
+      "/api/workspaces/" +
+      encodeURIComponent(slug) +
+      "/projects/" +
+      encodeURIComponent(projectId) +
+      "/states-lite/";
+    try {
+      fetch(url, { credentials: "same-origin" })
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .then(function (data) {
+          var rows = [];
+          if (Array.isArray(data)) rows = data;
+          else if (data && Array.isArray(data.results)) rows = data.results;
+          var ids = rows
+            .map(function (s) {
+              return s && s.id ? String(s.id) : null;
+            })
+            .filter(Boolean);
+          if (ids.length) {
+            window.__cosmicStateIdsByProject[projectId] = ids;
+            window.__cosmicRouterProjectId = projectId;
+            // Nudge React: toggle a storage event many boards subscribe to
+            try {
+              window.dispatchEvent(new Event("local-storage:issue_local_filters"));
+            } catch (_) {}
+          }
+        })
+        .catch(function () {});
+    } catch (_) {}
+  }
+  function ensureBoardGroupByState(slug, projectId) {
+    if (!slug || !projectId) return;
+    var url =
+      "/api/workspaces/" +
+      encodeURIComponent(slug) +
+      "/projects/" +
+      encodeURIComponent(projectId) +
+      "/user-properties/";
+    try {
+      fetch(url, { credentials: "same-origin" })
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .then(function (data) {
+          if (!data || typeof data !== "object") return;
+          var df = data.display_filters || {};
+          var gb = df.group_by;
+          var bad =
+            gb === "type" ||
+            gb === "parent_type" ||
+            gb === "type_id" ||
+            gb === "parent_id" ||
+            gb === "milestone" ||
+            gb === "release";
+          // Also force when group_by missing on kanban layouts
+          var layout = df.layout;
+          if (!bad && !(layout === "kanban" && (gb == null || gb === ""))) return;
+          var next = Object.assign({}, data, {
+            display_filters: Object.assign({}, df, {
+              group_by: "state",
+              sub_group_by:
+                df.sub_group_by === "type" ||
+                df.sub_group_by === "parent_type"
+                  ? null
+                  : df.sub_group_by,
+            }),
+          });
+          var csrf = null;
+          try {
+            var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+            csrf = m ? decodeURIComponent(m[1]) : null;
+          } catch (_) {}
+          fetch(url, {
+            method: "PATCH",
+            credentials: "same-origin",
+            headers: {
+              "content-type": "application/json",
+              ...(csrf ? { "X-CSRFToken": csrf } : {}),
+            },
+            body: JSON.stringify({
+              display_filters: next.display_filters,
+            }),
+          }).catch(function () {});
+        })
+        .catch(function () {});
+    } catch (_) {}
+  }
+  function isIssuesPath() {
+    try {
+      var path =
+        (typeof location !== "undefined" && location.pathname) ||
+        (window.location && window.location.pathname) ||
+        "";
+      return /\/projects\/[^/]+\/issues\/?/.test(path);
+    } catch (_) {
+      return false;
+    }
+  }
+  function runBoardWarmup() {
+    if (!isIssuesPath()) return;
+    var slug = workspaceSlugFromPath();
+    var pid = projectIdFromPath();
+    window.__cosmicRouterProjectId = pid;
+    prefetchProjectStates(slug, pid);
+    ensureBoardGroupByState(slug, pid);
+  }
+  runBoardWarmup();
+  // SPA client navigations
+  try {
+    var _ps = history.pushState;
+    var _rs = history.replaceState;
+    history.pushState = function () {
+      var r = _ps.apply(this, arguments);
+      setTimeout(runBoardWarmup, 0);
+      return r;
+    };
+    history.replaceState = function () {
+      var r = _rs.apply(this, arguments);
+      setTimeout(runBoardWarmup, 0);
+      return r;
+    };
+    window.addEventListener("popstate", function () {
+      setTimeout(runBoardWarmup, 0);
+    });
+  } catch (_) {}
+
+  // One-shot recovery: count badge present, zero issue rows → fix filters + reload
+  function blankBoardRecovery() {
+    if (!isIssuesPath()) return;
+    if (sessionStorage.getItem("cosmic_blank_board_reloaded") === "1") return;
+    try {
+      var text = (document.body && document.body.innerText) || "";
+      var countMatch = text.match(/Work items?\s+(\d+)/i);
+      var count = countMatch ? parseInt(countMatch[1], 10) : 0;
+      if (!(count > 0)) return;
+      // issue rows / kanban cards
+      var rows =
+        document.querySelectorAll(
+          '[id^="issue-"], a[href*="/issues/"][href*="-"], .group\\/kanban-block'
+        ).length || 0;
+      // Also count list rows with sequence-like DEMO-1
+      if (rows < 1 && /[A-Z]{2,5}-\d+/.test(text)) rows = 1;
+      if (rows >= 1) return;
+      // pure empty main with badge — recover once
+      sessionStorage.setItem("cosmic_blank_board_reloaded", "1");
+      coerceIssueLocalFiltersStorage();
+      var slug = workspaceSlugFromPath();
+      var pid = projectIdFromPath();
+      ensureBoardGroupByState(slug, pid);
+      // Force local filters to state for this view
+      try {
+        var raw = localStorage.getItem("issue_local_filters");
+        if (raw) {
+          var arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            arr.forEach(function (entry) {
+              if (!entry || !entry.filters) return;
+              var df =
+                entry.filters.display_filters ||
+                entry.filters.displayFilters ||
+                {};
+              if (typeof df === "object") {
+                df.group_by = "state";
+                if (
+                  df.sub_group_by === "type" ||
+                  df.sub_group_by === "parent_type"
+                )
+                  df.sub_group_by = null;
+                if (entry.filters.display_filters) entry.filters.display_filters = df;
+                if (entry.filters.displayFilters) entry.filters.displayFilters = df;
+              }
+            });
+            localStorage.setItem("issue_local_filters", JSON.stringify(arr));
+          }
+        }
+      } catch (_) {}
+      setTimeout(function () {
+        try {
+          (window.location || location).reload();
+        } catch (_) {}
+      }, 200);
+    } catch (_) {}
+  }
+  setTimeout(blankBoardRecovery, 2500);
+  setTimeout(blankBoardRecovery, 5000);
+  setTimeout(function () {
+    try {
+      sessionStorage.removeItem("cosmic_blank_board_reloaded");
+    } catch (_) {}
+  }, 30000);
   // CSS force: ResizableSidebar sets inline width:0 when MobX says collapsed.
   // !important beats those inline styles so the Projects panel stays visible.
   function injectForceOpenCss() {

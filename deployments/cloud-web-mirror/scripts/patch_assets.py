@@ -118,6 +118,86 @@ def fix_css_modulepreloads() -> None:
     print(f"css-modulepreload total fixes: {fixed}")
 
 
+def ensure_board_groups_fallback() -> None:
+    """Prevent blank work-items board when getGroupByColumns returns undefined.
+
+    Commercial layout: if (!groups) return null — happens when group_by is type
+    (no CE work-item types), parent_type (always void 0), or state ids not loaded
+    yet. Fall back to All Issues column and inject cosmic state-id cache for
+    state grouping so intermittent blank boards (count badge only) stop.
+    """
+    needle_old = (
+        "nr=ot((e,t,n,r)=>{if(!e)return t?[N]:void 0;"
+        "let i=tr[e]({isWorkspaceLevel:n,projectId:r});if(i)return L(e,i)})"
+    )
+    # Prefer state ids from SPA store; else window.__cosmicStateIdsByProject
+    # (filled by inject from states-lite). Never return undefined when groupBy set.
+    needle_new = (
+        "nr=ot((e,t,n,r)=>{"
+        "if(!e)return t?[N]:void 0;"
+        "let i=tr[e]({isWorkspaceLevel:n,projectId:r});"
+        "if((!i||Array.isArray(i)&&i.length===0)&&(e===`state`||e===`state_detail.group`)){"
+        "let p=r||(typeof window<`u`?window.__cosmicRouterProjectId:void 0);"
+        "let c=typeof window<`u`&&window.__cosmicStateIdsByProject;"
+        "if(p&&c&&c[p]&&c[p].length)i=c[p]"
+        "}"
+        "if(i&&(!Array.isArray(i)||i.length>0))return L(e,i);"
+        "return[N]"
+        "})"
+    )
+    nfiles = 0
+    for path in list(ROOT.glob("work-item-layout*.js")) + list(
+        (ROOT / "releases").glob("**/work-item-layout*.js") if (ROOT / "releases").exists() else []
+    ):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if needle_old not in raw:
+            # already patched or different minification
+            if "cosmicStateIdsByProject" in raw:
+                print(f"board groups already patched: {path.name}")
+                continue
+            print(f"WARN: board groups needle missing in {path.name}")
+            continue
+        path.write_text(raw.replace(needle_old, needle_new), encoding="utf-8")
+        nfiles += 1
+        print(f"board groups fallback: {path.name}")
+    # base-list / base-kanban: if groups empty array, still paint (don't require null-only)
+    # already handled by returning [N] instead of undefined
+    print(f"board groups fallback files: {nfiles}")
+
+    # When columns fall back to single "All Issues" but store is still keyed by
+    # state/type ids, flatten issue-id arrays into All Issues so rows paint.
+    list_old = (
+        "j=O?Object.assign(A,{[k[0]]:t[`All Issues`]??[]}):qe(t)?A:Object.assign(A,{...t}),"
+    )
+    list_new = (
+        "j=O?Object.assign(A,{[k[0]]:t[`All Issues`]??[]}):qe(t)?A:Object.assign(A,{...t});"
+        "if(k.length===1&&k[0]===`All Issues`&&t&&typeof t==`object`&&!Array.isArray(t)){"
+        "let _all=[],_has=t[`All Issues`];"
+        "if(!(_has&&_has.length)){for(let _v of Object.values(t)){"
+        "if(Array.isArray(_v))_all=_all.concat(_v);"
+        "else if(_v&&typeof _v==`object`){for(let _x of Object.values(_v))if(Array.isArray(_x))_all=_all.concat(_x)}"
+        "}if(_all.length)j={[`All Issues`]:_all}}"
+        "},"
+    )
+    for path in list(ROOT.glob("base-list-root*.js")) + list(
+        (ROOT / "releases").glob("**/base-list-root*.js") if (ROOT / "releases").exists() else []
+    ):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if list_old in raw:
+            path.write_text(raw.replace(list_old, list_new), encoding="utf-8")
+            print(f"list All Issues flatten: {path.name}")
+        elif "_all=_all.concat" in raw:
+            print(f"list flatten already: {path.name}")
+        else:
+            print(f"WARN: list flatten needle missing in {path.name}")
+
+
 def ensure_epic_migration_fallbacks() -> None:
     """Commercial SPA expects product_tour.epic_migration.* — self-host may miss that ns.
     Keep English copy fallbacks so users never see raw i18n key strings."""
@@ -353,9 +433,11 @@ def main() -> int:
     print(f"ai-selfhost surgical: {ai_n}")
     ensure_lazy_module_fallback()
     ensure_epic_migration_fallbacks()
+    ensure_board_groups_fallback()
     fix_css_modulepreloads()
     namespace_release_assets()
-    # re-apply after namespace so release copies also drop css modulepreloads
+    # re-apply after namespace so release copies also get board + css fixes
+    ensure_board_groups_fallback()
     fix_css_modulepreloads()
     return 0
 
