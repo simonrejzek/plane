@@ -24,6 +24,7 @@ from plane.db.models import (
     ModuleIssue,
     IssueType,
 )
+from plane.graphql.types.users import UserType
 
 
 @strawberry.type
@@ -164,38 +165,51 @@ class IssuesType:
         return [str(module_id) for module_id in module_issues]
 
     @strawberry.field
-    def project_identifier(self) -> Optional[str]:
-        project = getattr(self, "project", None)
-        if project is not None and hasattr(project, "identifier"):
+    async def project_identifier(self) -> Optional[str]:
+        project = self._state.fields_cache.get("project")
+        if project is not None:
             return project.identifier
         project_id = getattr(self, "project_id", None)
         if not project_id:
             return None
         from plane.db.models import Project
 
-        try:
-            return Project.objects.filter(pk=project_id).values_list(
+        return await sync_to_async(
+            lambda: Project.objects.filter(pk=project_id).values_list(
                 "identifier", flat=True
             ).first()
-        except Exception:
-            return None
+        )()
 
     @strawberry.field
-    def parent_project_id(self) -> Optional[str]:
-        parent = getattr(self, "parent", None)
-        if parent is not None and getattr(parent, "project_id", None):
+    async def parent_project_id(self) -> Optional[str]:
+        parent = self._state.fields_cache.get("parent")
+        if parent is not None and parent.project_id:
             return str(parent.project_id)
-        return None
+        parent_id = getattr(self, "parent_id", None)
+        if not parent_id:
+            return None
+        project_id = await sync_to_async(
+            lambda: Issue.issue_objects.filter(pk=parent_id).values_list(
+                "project_id", flat=True
+            ).first()
+        )()
+        return str(project_id) if project_id else None
 
     @strawberry.field
-    def parent_project_identifier(self) -> Optional[str]:
-        parent = getattr(self, "parent", None)
-        if parent is None:
+    async def parent_project_identifier(self) -> Optional[str]:
+        parent = self._state.fields_cache.get("parent")
+        if parent is not None:
+            project = parent._state.fields_cache.get("project")
+            if project is not None:
+                return project.identifier
+        parent_id = getattr(self, "parent_id", None)
+        if not parent_id:
             return None
-        project = getattr(parent, "project", None)
-        if project is not None and hasattr(project, "identifier"):
-            return project.identifier
-        return None
+        return await sync_to_async(
+            lambda: Issue.issue_objects.filter(pk=parent_id).values_list(
+                "project__identifier", flat=True
+            ).first()
+        )()
 
     # Official mobile IssuesQuery / workspaceIssues — epics not in CE
     @strawberry.field(name="parentIsEpic")
@@ -225,6 +239,15 @@ class IssueAnalyticsType:
     started: int = 0
     completed: int = 0
     cancelled: int = 0
+
+
+@strawberry.type
+class IssueStatsType:
+    attachments: int = 0
+    relations: int = 0
+    sub_work_items: int = 0
+    links: int = 0
+    pages: int = 0
 
 
 @strawberry_django.type(ProjectUserProperty)
@@ -271,6 +294,10 @@ class IssuePropertyActivityType:
     updated_at: datetime
 
     @strawberry.field
+    def actor_details(self) -> Optional[UserType]:
+        return self._state.fields_cache.get("actor")
+
+    @strawberry.field
     def workspace(self) -> int:
         return self.workspace_id
 
@@ -305,8 +332,13 @@ class IssueCommentActivityType:
     external_id: Optional[str]
     workspace: strawberry.ID
     project: strawberry.ID
+    parent: Optional[strawberry.ID]
     created_at: datetime
     updated_at: datetime
+
+    @strawberry.field
+    def actor_details(self) -> Optional[UserType]:
+        return self._state.fields_cache.get("actor")
 
     @strawberry.field
     def workspace(self) -> int:
@@ -323,6 +355,10 @@ class IssueCommentActivityType:
     @strawberry.field
     def issue(self) -> int:
         return self.issue_id
+
+    @strawberry.field
+    def parent(self) -> Optional[strawberry.ID]:
+        return str(self.parent_id) if self.parent_id else None
 
 
 @strawberry_django.type(Issue)

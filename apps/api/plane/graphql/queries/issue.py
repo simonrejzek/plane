@@ -22,6 +22,7 @@ from plane.graphql.types.issue import (
     IssueUserPropertyType,
     IssueCommentActivityType,
     IssuePropertyActivityType,
+    IssueStatsType,
     IssueTypesType,
 )
 from plane.db.models import (
@@ -30,7 +31,11 @@ from plane.db.models import (
     ProjectUserProperty,
     IssueComment,
     CommentReaction,
+    FileAsset,
     IssueType,
+    IssueLink,
+    IssueRelation,
+    PageLog,
 )
 from plane.graphql.utils.issue_filters import issue_filters
 from plane.graphql.permissions.workspace import WorkspaceBasePermission
@@ -178,14 +183,18 @@ class IssueQuery:
         issue: strawberry.ID,
     ) -> IssuesType:
         try:
-            issue_detail = await sync_to_async(Issue.issue_objects.get)(
-                workspace__slug=slug,
-                project_id=project,
-                id=issue,
-                project__project_projectmember__member=info.context.user,
-                project__project_projectmember__is_active=True,
-            )
-        except Exception:
+            issue_detail = await sync_to_async(
+                lambda: Issue.issue_objects.select_related(
+                    "project", "parent__project"
+                ).get(
+                    workspace__slug=slug,
+                    project_id=project,
+                    id=issue,
+                    project__project_projectmember__member=info.context.user,
+                    project__project_projectmember__is_active=True,
+                )
+            )()
+        except Issue.DoesNotExist:
             message = "Issue not found."
             error_extensions = {
                 "code": "ISSUE_NOT_FOUND",
@@ -203,6 +212,69 @@ class IssueQuery:
             entity_identifier=issue,
         )
         return issue_detail
+
+    @strawberry.field(
+        name="issueStats",
+        extensions=[PermissionExtension(permissions=[ProjectBasePermission()])],
+    )
+    async def issue_stats(
+        self,
+        info: Info,
+        slug: str,
+        project: str,
+        issue: str,
+    ) -> IssueStatsType:
+        def get_stats() -> IssueStatsType:
+            issue_exists = Issue.issue_objects.filter(
+                workspace__slug=slug,
+                project_id=project,
+                id=issue,
+            ).exists()
+            if not issue_exists:
+                raise GraphQLError(
+                    "Issue not found.",
+                    extensions={
+                        "code": "ISSUE_NOT_FOUND",
+                        "statusCode": 404,
+                    },
+                )
+
+            return IssueStatsType(
+                attachments=FileAsset.objects.filter(
+                    issue_id=issue,
+                    entity_type=FileAsset.EntityTypeContext.ISSUE_ATTACHMENT,
+                    is_deleted=False,
+                    is_archived=False,
+                ).count(),
+                relations=IssueRelation.objects.filter(
+                    Q(issue_id=issue) | Q(related_issue_id=issue),
+                    workspace__slug=slug,
+                    project_id=project,
+                    deleted_at__isnull=True,
+                ).count(),
+                sub_work_items=Issue.issue_objects.filter(
+                    parent_id=issue,
+                    workspace__slug=slug,
+                    project_id=project,
+                ).count(),
+                links=IssueLink.objects.filter(
+                    issue_id=issue,
+                    workspace__slug=slug,
+                    project_id=project,
+                    deleted_at__isnull=True,
+                ).count(),
+                pages=PageLog.objects.filter(
+                    workspace__slug=slug,
+                    entity_name="issue",
+                    entity_identifier=issue,
+                    deleted_at__isnull=True,
+                )
+                .values("page_id")
+                .distinct()
+                .count(),
+            )
+
+        return await sync_to_async(get_stats, thread_sensitive=True)()
 
 
 @strawberry.type
@@ -291,7 +363,13 @@ class IssuePropertiesActivityQuery:
                 project__archived_at__isnull=True,
                 workspace__slug=slug,
             )
-            .select_related("actor", "workspace", "issue", "project")
+            .select_related(
+                "actor",
+                "actor__avatar_asset",
+                "workspace",
+                "issue",
+                "project",
+            )
             .order_by("created_at")
         )
 
@@ -320,7 +398,13 @@ class IssueCommentActivityQuery:
                 project__archived_at__isnull=True,
             )
             .order_by("created_at")
-            .select_related("actor", "issue", "project", "workspace")
+            .select_related(
+                "actor",
+                "actor__avatar_asset",
+                "issue",
+                "project",
+                "workspace",
+            )
             .prefetch_related(
                 Prefetch(
                     "comment_reactions",
