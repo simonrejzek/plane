@@ -48,6 +48,7 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v37
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v35
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-${{ github.sha }}
@@ -102,6 +103,8 @@ jobs:
             exit 1
           fi
           grep -q "releases/(?<rel>" nginx.conf
+          # useParams must merge parent route params (workspaceSlug/projectId)
+          grep -R -q "for(let n of e)if(n&&n.params)" public/assets/chunk-IJF3QNGC-*.js public/assets/releases/"$CLOUD_MIRROR_RELEASE"/chunk-IJF3QNGC-*.js
           node --check public/assets/sidebar-wrapper-v7tips.js
           # Sidebar bare keys must not be minified 2-letter junk
           grep -q '"drafts":"Drafts"' public/assets/en-i18n-fallbacks-v7.js
@@ -116,8 +119,11 @@ jobs:
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v36
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v35
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v36
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v37
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v37 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v37
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v37 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v35
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v37
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v35

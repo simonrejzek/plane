@@ -481,6 +481,93 @@ def ensure_lazy_module_fallback() -> None:
         )
 
 
+def ensure_use_params_merge_matches() -> None:
+    """Merge React Router match params so Work items can fetch issues.
+
+    Commercial chunk useParams is implemented as::
+
+        return matches[matches.length-1]?.params ?? {}
+
+    Leaf routes under ``projects/(detail)/[projectId]/issues/(list)`` often
+    contribute empty params, so ``workspaceSlug`` / ``projectId`` from parents
+    are dropped. ``use-issues-actions`` then no-ops::
+
+        if (!workspaceSlug || !projectId) return
+
+    and ListLayout never hits ``/issues/?group_by=…`` — empty card tray with
+    Display / Add work item chrome still visible.
+    """
+    old = "function Vt(){let{matches:e}=G.useContext($);return e[e.length-1]?.params??{}}"
+    new = (
+        "function Vt(){let{matches:e}=G.useContext($);"
+        "let t={};"
+        "if(e)for(let n of e)if(n&&n.params)for(let r in n.params)"
+        "if(n.params[r]!=null)t[r]=n.params[r];"
+        "return t}"
+    )
+    # alternate minifier letters seen in older mirrors
+    alts = [
+        (
+            "function Vt(){let{matches:e}=G.useContext($);return e[e.length-1]?.params??{}}",
+            new,
+        ),
+        (
+            "function Vt(){let{matches:e}=G.useContext($);return e.at(-1)?.params??{}}",
+            new,
+        ),
+    ]
+    nfiles = 0
+    for path in ROOT.rglob("chunk-IJF3QNGC-*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        original = raw
+        if "for(let n of e)if(n&&n.params)" in raw:
+            print(f"useParams merge already: {path.name}")
+            continue
+        for o, n in alts:
+            if o in raw:
+                raw = raw.replace(o, n, 1)
+                break
+        if raw != original:
+            path.write_text(raw, encoding="utf-8")
+            nfiles += 1
+            print(f"useParams merge patched: {path.name}")
+    # also hard-fallback PROJECT fetchIssues when params still empty
+    actions_old = (
+        "m=()=>{let{workspaceSlug:e,projectId:t}=s(),n=e?.toString(),i=t?.toString(),"
+        "{issues:a,issuesFilter:o}=l(r.PROJECT),c=(0,d.useCallback)(async(e,t)=>{"
+        "if(!(!n||!i))return a.fetchIssues(n.toString(),i.toString(),e,t)},[a.fetchIssues,n,i]),"
+    )
+    actions_new = (
+        "m=()=>{let{workspaceSlug:e,projectId:t}=s();"
+        "if(!e||!t){try{let m=(typeof location<`u`&&location.pathname||``)"
+        ".match(/^\\/([^/]+)\\/projects\\/([0-9a-fA-F-]{36})/);"
+        "if(m){e=e||m[1],t=t||m[2]}}catch(x){}}"
+        "let n=e?.toString(),i=t?.toString(),"
+        "{issues:a,issuesFilter:o}=l(r.PROJECT),c=(0,d.useCallback)(async(e,t)=>{"
+        "if(!(!n||!i))return a.fetchIssues(n.toString(),i.toString(),e,t)},[a.fetchIssues,n,i]),"
+    )
+    for path in ROOT.rglob("use-issues-actions-*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "location.pathname||``).match(/^\\/([^/]+)\\/projects\\/" in raw or (
+            "location.pathname||``)" in raw and "projects\\/([0-9a-fA-F-]{36})" in raw
+        ):
+            print(f"issues-actions path fallback already: {path.name}")
+            continue
+        if actions_old in raw:
+            path.write_text(raw.replace(actions_old, actions_new, 1), encoding="utf-8")
+            nfiles += 1
+            print(f"issues-actions path fallback: {path.name}")
+        else:
+            print(f"WARN: issues-actions needle missing in {path.name}")
+    print(f"useParams/issues-fetch param fixes: {nfiles}")
+
+
 def ensure_project_issues_board_mount() -> None:
     """Mount project Work items even while filters hydrate; always fetch list.
 
@@ -623,12 +710,14 @@ def main() -> int:
     enable_selfhost_issue_bootstrap()
     ensure_board_groups_fallback()
     ensure_project_issues_board_mount()
+    ensure_use_params_merge_matches()
     fix_css_modulepreloads()
     namespace_release_assets()
     # re-apply after namespace so release copies also get board + css fixes
     enable_selfhost_issue_bootstrap()
     ensure_board_groups_fallback()
     ensure_project_issues_board_mount()
+    ensure_use_params_merge_matches()
     fix_css_modulepreloads()
     return 0
 
