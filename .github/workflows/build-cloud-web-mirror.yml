@@ -48,8 +48,8 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v32
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v31
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v30
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-${{ github.sha }}
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
 
@@ -82,8 +82,11 @@ jobs:
           # AI grey-screen surgical patches present
           grep -q "s=!0,c=!0" public/assets/detail-DFXDSk4X.js
           grep -q 'e._result?.default||(()=>null)' public/assets/chunk-IJF3QNGC-D_ocRA8b.js
-          grep -q "inject.js?v=38" public/index.html
+          grep -qE "inject\\.js\\?v=3[89]" public/index.html
           grep -q "cosmicStateIdsByProject" public/assets/work-item-layout-*.js
+          # Self-host must not skip issue bootstrap (commercial sidecar flag)
+          grep -R -q "skipBootstrap:()=>!1" public/assets/store-context*.js
+          ! grep -R -q "skipBootstrap:()=>!0" public/assets/store-context*.js
           node --check public/assets/sidebar-wrapper-v7tips.js
           # Sidebar bare keys must not be minified 2-letter junk
           grep -q '"drafts":"Drafts"' public/assets/en-i18n-fallbacks-v7.js
@@ -98,8 +101,8 @@ jobs:
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v31
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v31 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v31
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v31 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v30
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v32
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v32 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v32
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v32 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v31
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v32
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v31
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v30

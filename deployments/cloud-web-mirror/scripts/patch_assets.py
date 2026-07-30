@@ -118,7 +118,37 @@ def fix_css_modulepreloads() -> None:
     print(f"css-modulepreload total fixes: {fixed}")
 
 
-def ensure_board_groups_fallback() -> None:
+def enable_selfhost_issue_bootstrap() -> None:
+    """Commercial SPA ships skipBootstrap:()=>!0 (sidecar mode).
+
+    With that flag, project-wrapper / layout-main pass a null SWR key so
+    issues, members, labels, and modules never fetch — blank Work items
+    pane with zero /issues/ network calls. Self-host has no sidecar: force
+    skipBootstrap off so boards load.
+    """
+    n = 0
+    for path in list(ROOT.rglob("store-context*.js")) + list(
+        (ROOT / "releases").rglob("store-context*.js") if (ROOT / "releases").exists() else []
+    ):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "skipBootstrap:()=>!0" not in raw:
+            if "skipBootstrap:()=>!1" in raw:
+                print(f"skipBootstrap already off: {path.name}")
+            continue
+        path.write_text(
+            raw.replace("skipBootstrap:()=>!0", "skipBootstrap:()=>!1"),
+            encoding="utf-8",
+        )
+        n += 1
+        print(f"skipBootstrap disabled: {path.name}")
+    print(f"skipBootstrap patch files: {n}")
+
+
+def enable_selfhost_issue_bootstrap()
+    ensure_board_groups_fallback() -> None:
     """Prevent blank work-items board when getGroupByColumns returns undefined.
 
     Commercial layout: if (!groups) return null — happens when group_by is type
@@ -433,10 +463,12 @@ def main() -> int:
     print(f"ai-selfhost surgical: {ai_n}")
     ensure_lazy_module_fallback()
     ensure_epic_migration_fallbacks()
+    enable_selfhost_issue_bootstrap()
     ensure_board_groups_fallback()
     fix_css_modulepreloads()
     namespace_release_assets()
     # re-apply after namespace so release copies also get board + css fixes
+    enable_selfhost_issue_bootstrap()
     ensure_board_groups_fallback()
     fix_css_modulepreloads()
     return 0
