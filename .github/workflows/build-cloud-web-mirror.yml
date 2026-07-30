@@ -26,7 +26,7 @@ jobs:
           python3 scripts/build_index.py
           test -f public/index.html
           test -f "public/assets/releases/$CLOUD_MIRROR_RELEASE/detail-DFXDSk4X.js"
-          grep -q "/assets/releases/$CLOUD_MIRROR_RELEASE/manifest-V6i18n.js" public/index.html
+          grep -q "/assets/releases/$CLOUD_MIRROR_RELEASE/manifest-36336048.js" public/index.html
           # Safety: no remaining cloud PI host in primary bundles
           ! grep -R "https://pi.plane.so" public/assets/root-*.js public/assets/entry.client-*.js || (echo "PI host still present" && exit 1)
           ! grep -R "https://api.plane.so" public/assets/root-*.js public/assets/entry.client-*.js || (echo "API host still present" && exit 1)
@@ -61,12 +61,12 @@ jobs:
           grep -R -q "Epics is now a work item type" public/assets/epic-migration-*.js
           grep -R -q "||F\\[e\\].title" public/assets/epic-migration-*.js
           test -f public/assets/epic-migration-V6i18n.js
-          test -f public/assets/manifest-V6i18n.js
+          test -f public/assets/manifest-36336048.js
           test -f public/epic-migration/step-1.gif
           test -f public/epic-migration/step-2.webp
           test -f public/epic-migration/step-3.webp
           test -s public/epic-migration/step-1.gif
-          grep -q "manifest-V6i18n" public/index.html
+          grep -q "manifest-36336048" public/index.html
           test -f public/assets/en-i18n-fallbacks-v7.js
           test -f public/assets/tip-download-app-dark-v7.webp
           grep -q "en-i18n-fallbacks-v7" public/index.html
