@@ -2405,6 +2405,7 @@ async def get_attachment(attachment_id: str):
 
 
 @app.post("/api/v1/transcription/")
+@app.post("/api/v1/transcription/transcribe/")
 @app.post("/api/v1/transcribe/")
 @app.post("/api/v1/audio/transcriptions/")
 @app.post("/api/v1/chat/transcribe/")

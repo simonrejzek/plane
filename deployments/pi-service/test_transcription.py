@@ -40,7 +40,7 @@ def test_transcription_uses_whisper_large_v3_turbo(monkeypatch):
 
     with patch.object(pi_service.httpx, "AsyncClient", FakeAsyncClient):
         response = TestClient(pi_service.app).post(
-            "/api/v1/transcribe/",
+            "/api/v1/transcription/transcribe/?workspace_id=workspace&chat_id=chat",
             files={"file": ("sample.webm", b"audio-data", "audio/webm")},
         )
 
