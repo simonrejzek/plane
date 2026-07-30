@@ -615,19 +615,31 @@ def ensure_issues_init_fetch_retries() -> None:
             "if(m){e=m[1],t=m[2]}}catch(x){}let n=e?.toString(),i=t?.toString(),"
             "{issues:a,issuesFilter:o}=l(r.PROJECT),"
         )
-        if "if(m){e=m[1],t=m[2]}" in raw:
-            print(f"actions always-path already: {path.name}")
-            continue
-        if cond in raw:
-            path.write_text(raw.replace(cond, always, 1), encoding="utf-8")
+        original = raw
+        if "if(m){e=m[1],t=m[2]}" not in raw:
+            if cond in raw:
+                raw = raw.replace(cond, always, 1)
+            elif bare in raw:
+                raw = raw.replace(bare, bare_new, 1)
+        # Re-parse path on every fetchIssues call (closed-over n/i can be empty)
+        old_cb = (
+            "l(r.PROJECT),c=(0,d.useCallback)(async(e,t)=>{"
+            "if(!(!n||!i))return a.fetchIssues(n.toString(),i.toString(),e,t)},[a.fetchIssues,n,i])"
+        )
+        new_cb = (
+            "l(r.PROJECT),c=(0,d.useCallback)(async(e,t)=>{"
+            "let w=n,p=i;try{let m=(typeof location<`u`&&location.pathname||``)"
+            ".match(/^\\/([^/]+)\\/projects\\/([0-9a-fA-F-]{36})/);if(m){w=m[1],p=m[2]}}catch(x){}"
+            "if(!(!w||!p))return a.fetchIssues(String(w),String(p),e,t)},[a.fetchIssues,n,i])"
+        )
+        if "String(w),String(p)" not in raw and old_cb in raw:
+            raw = raw.replace(old_cb, new_cb, 1)
+        if raw != original:
+            path.write_text(raw, encoding="utf-8")
             n += 1
-            print(f"actions always-path: {path.name}")
-        elif bare in raw:
-            path.write_text(raw.replace(bare, bare_new, 1), encoding="utf-8")
-            n += 1
-            print(f"actions path from bare: {path.name}")
+            print(f"actions path/fetch: {path.name}")
         else:
-            print(f"WARN: actions path needle missing in {path.name}")
+            print(f"actions path already: {path.name}")
     # Seed default applied filters when project filter map not ready
     gaf_old = (
         "getAppliedFilters=e=>{if(!e)return;let t=this.getIssueFilters(e);if(!t)return;"
