@@ -23,9 +23,8 @@
 		}
 		reverse_proxy pi:8080
 	}
-	# Critical SPA AI/Wiki gate bundles — serve patched copies from PI (no-store).
-	# SW also remaps these for browsers stuck on Cloudflare HIT of old hashes.
-	@ai_gate_assets path_regexp ai_gate ^/assets/(detail-DFXDSk4X|layout-CR1P7wEo|store-context-BZelk5Qy|use-ai-flag-CyOtmqWk|entry\.client-DHb__A1L|toast-etX1DRQn)\.js$
+	# Patched commercial SPA gate modules (capture) — always from PI, never CF-stale web
+	@ai_gate_assets path_regexp ai_gate ^/assets/(detail-DFXDSk4X|layout-CR1P7wEo|layout-CFpI-AZP|store-context-BZelk5Qy|use-ai-flag-CyOtmqWk|entry\.client-DHb__A1L|toast-etX1DRQn|page-CvY-jB5L2|page-BwDOPCRq2)\.js$
 	handle @ai_gate_assets {
 		header {
 			Cache-Control "no-cache, no-store, must-revalidate"
@@ -35,12 +34,12 @@
 		rewrite * /cosmic-pilot/static/patched-spa/{re.ai_gate.1}.js
 		reverse_proxy pi:8080
 	}
-	# Service worker (must allow root scope)
-	@ai_sw path /cosmic-pilot/sw-ai-gate.js /sw-ai-gate.js
-	handle @ai_sw {
+	# Explicit patched-spa path (importmap targets this)
+	@patched_spa path_regexp ^/cosmic-pilot/static/patched-spa/
+	handle @patched_spa {
 		header {
 			Cache-Control "no-cache, no-store, must-revalidate"
-			Service-Worker-Allowed "/"
+			Pragma "no-cache"
 			CDN-Cache-Control "no-store"
 		}
 		reverse_proxy pi:8080

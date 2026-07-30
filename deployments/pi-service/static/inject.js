@@ -1,69 +1,41 @@
 /**
- * Cosmic inject — soft fixes only (v27).
+ * Cosmic inject v29 — soft fixes only. NO reloads. NO service workers.
  *
- * Do NOT overlay custom Wiki/AI shells. The commercial SPA already ships
- * real Wiki (:workspaceSlug/wiki) and AI (:workspaceSlug/ai-chat) route
- * modules. Overlaying /cosmic-pilot/* replaced app.plane.so UI with a
- * homemade shell.
- *
- * This script:
- *  - merges fixed English i18n (ICU plurals)
- *  - marks product tours dismissed
- *  - soft-fixes raw ICU text that leaks into the DOM
- *  - forces commercial PI/Wiki flags + auth-check success on XHR/fetch
- *    so Plane AI cannot paint the empty/grey unauthorized void
+ * Commercial SPA Wiki/AI modules are the capture from app.plane.so.
+ * This script only:
+ *  - unregisters broken SW from v28 (was causing click→reload bounce)
+ *  - forces PI/Wiki flags + auth-check on XHR/fetch
+ *  - i18n + tour dismiss
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 28;
+  window.__cosmicInjectVersion = 29;
 
-  // Service worker: force patched AI/Wiki gate modules even when Cloudflare
-  // still has a 4h HIT of the unpatched commercial bundles (grey void).
-  (function registerAiGateSw() {
-    try {
-      if (!("serviceWorker" in navigator)) return;
-      navigator.serviceWorker
-        .register("/cosmic-pilot/sw-ai-gate.js", { scope: "/" })
-        .then(function (reg) {
+  // ---- KILL v28 service worker + never reload ----
+  try {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        regs.forEach(function (r) {
           try {
-            reg.update();
+            r.unregister();
           } catch (_) {}
-          // One reload per session so already-loaded modules pick up SW map
-          var key = "cosmic_ai_gate_sw_reloaded_v28";
-          if (!sessionStorage.getItem(key)) {
-            sessionStorage.setItem(key, "1");
-            // Only reload if we are past first paint and SW is controlling (or waiting)
-            var need =
-              location.pathname.indexOf("/ai-chat") !== -1 ||
-              location.pathname.indexOf("/wiki") !== -1;
-            if (need || !navigator.serviceWorker.controller) {
-              setTimeout(function () {
-                location.reload();
-              }, 400);
-            }
-          }
-        })
-        .catch(function (e) {
-          console.warn("cosmic ai-gate sw register failed", e);
         });
-    } catch (e) {
-      console.warn("cosmic ai-gate sw", e);
+      });
     }
-  })();
+  } catch (_) {}
+  try {
+    sessionStorage.removeItem("cosmic_ai_gate_sw_reloaded_v28");
+  } catch (_) {}
 
-  // Remove any leftover overlay from previous inject versions
+  // Remove leftover overlay shells
   try {
     var old = document.getElementById("cosmic-shell-overlay");
     if (old && old.parentNode) old.parentNode.removeChild(old);
     document.documentElement.removeAttribute("data-cosmic-shell");
   } catch (_) {}
 
-  // ---- Force PI/Wiki/AI API responses (XHR + fetch) ----
-  // Commercial SPA greys out AI when:
-  //   - isWorkspaceAuthorized is false (auth-check fail)
-  //   - is_pi_enabled missing (Upgrade wall)
-  //   - AI_CHAT aiFeatureFlags missing (notConfigured → 404 grey)
+  // ---- Force PI/Wiki API responses (XHR + fetch) — capture SPA expects these ----
   (function forcePiWikiFlags() {
     function isTarget(url) {
       if (!url) return null;
@@ -89,36 +61,22 @@
         if (kind === "features") {
           data.is_pi_enabled = true;
           data.is_wiki_enabled = true;
-          data.is_milestones_enabled = data.is_milestones_enabled !== false;
           return data;
         }
         if (kind === "pay-flags" || kind === "v1-flags" || kind === "feature-flags") {
           if (!data.values || typeof data.values !== "object") data.values = {};
-          var keys = [
-            "AI_CHAT",
-            "AI_DEDUPE",
-            "AI_CONVERSE",
-            "AI_FILE_UPLOADS",
-            "AI_PAGES_BLOCKS",
-            "AI_PAGES_SUMMARY",
-            "AI_LABEL_PREDICTION",
-            "AI_MCP_CONNECTORS",
-            "AI_TEXT_TO_PQL",
-            "AI_PAGES_EDIT",
-            "AI_AUTOPILOT",
-            "AI_SKILLS",
-            "PI_CHAT",
-            "PI_CHAT_MOBILE",
-            "APP_RAIL",
-            "WORKSPACE_PAGES",
-            "NESTED_PAGES",
-            "EDITOR_AI_OPS",
-            "BRIDGE",
-          ];
-          for (var i = 0; i < keys.length; i++) data.values[keys[i]] = true;
-          // feature-flags endpoint uses nested default map sometimes
+          [
+            "AI_CHAT", "AI_DEDUPE", "AI_CONVERSE", "AI_FILE_UPLOADS", "AI_PAGES_BLOCKS",
+            "AI_PAGES_SUMMARY", "AI_MCP_CONNECTORS", "AI_TEXT_TO_PQL", "AI_PAGES_EDIT",
+            "AI_AUTOPILOT", "AI_SKILLS", "PI_CHAT", "APP_RAIL", "WORKSPACE_PAGES",
+            "NESTED_PAGES", "EDITOR_AI_OPS", "BRIDGE", "PAGE_TEMPLATES",
+          ].forEach(function (k) {
+            data.values[k] = true;
+          });
           if (data.default && typeof data.default === "object") {
-            for (var j = 0; j < keys.length; j++) data.default[keys[j]] = true;
+            Object.keys(data.values).forEach(function (k) {
+              data.default[k] = true;
+            });
           }
           return data;
         }
@@ -129,34 +87,18 @@
     function rewriteResponseText(kind, text) {
       try {
         var data = JSON.parse(text);
-        data = patchBody(kind, data);
-        return JSON.stringify(data);
+        return JSON.stringify(patchBody(kind, data));
       } catch (_) {
-        // If server returned non-JSON error, synthesize a good body for critical endpoints
-        if (kind === "auth-check") {
+        if (kind === "auth-check")
           return JSON.stringify({ is_authorized: true, oauth_url: null, has_chats: false });
-        }
-        if (kind === "v1-flags" || kind === "pay-flags") {
-          return JSON.stringify({
-            values: {
-              AI_CHAT: true,
-              APP_RAIL: true,
-              PI_CHAT: true,
-              WORKSPACE_PAGES: true,
-            },
-          });
-        }
-        if (kind === "features") {
-          return JSON.stringify({
-            is_pi_enabled: true,
-            is_wiki_enabled: true,
-          });
-        }
+        if (kind === "v1-flags" || kind === "pay-flags")
+          return JSON.stringify({ values: { AI_CHAT: true, APP_RAIL: true, WORKSPACE_PAGES: true } });
+        if (kind === "features")
+          return JSON.stringify({ is_pi_enabled: true, is_wiki_enabled: true });
         return text;
       }
     }
 
-    // XHR (axios uses this)
     try {
       var XO = XMLHttpRequest.prototype.open;
       var XS = XMLHttpRequest.prototype.send;
@@ -172,16 +114,13 @@
           xhr.addEventListener("readystatechange", function () {
             if (xhr.readyState !== 4) return;
             try {
-              var raw = xhr.responseText;
-              var fixed = rewriteResponseText(kind, raw);
-              if (fixed === raw) return;
+              var fixed = rewriteResponseText(kind, xhr.responseText);
               try {
                 Object.defineProperty(xhr, "responseText", { get: function () { return fixed; } });
               } catch (_) {}
               try {
                 Object.defineProperty(xhr, "response", { get: function () { return fixed; } });
               } catch (_) {}
-              // Force success status so catch paths don't set isWorkspaceAuthorized=false
               try {
                 Object.defineProperty(xhr, "status", { get: function () { return 200; } });
               } catch (_) {}
@@ -194,16 +133,11 @@
       console.warn("cosmic xhr patch failed", e);
     }
 
-    // fetch (selfhost bootstrap + some clients)
     try {
       var _f = window.fetch;
       window.fetch = function (input, init) {
         var url =
-          typeof input === "string"
-            ? input
-            : input && input.url
-              ? input.url
-              : String(input);
+          typeof input === "string" ? input : input && input.url ? input.url : String(input);
         var kind = isTarget(url);
         return _f.call(this, input, init).then(function (res) {
           if (!kind) return res;
@@ -211,8 +145,7 @@
             .clone()
             .text()
             .then(function (text) {
-              var fixed = rewriteResponseText(kind, text);
-              return new Response(fixed, {
+              return new Response(rewriteResponseText(kind, text), {
                 status: 200,
                 statusText: "OK",
                 headers: { "content-type": "application/json" },
@@ -228,11 +161,13 @@
     }
   })();
 
-  // ---- Fixed English i18n dictionary ----
+  // ---- Fixed English i18n ----
   (function loadFixedI18n() {
     try {
-      var u = "/cosmic-pilot/en-i18n-fallbacks-v7.js?v=27";
-      fetch(u, { credentials: "same-origin", cache: "no-store" })
+      fetch("/cosmic-pilot/en-i18n-fallbacks-v7.js?v=29", {
+        credentials: "same-origin",
+        cache: "no-store",
+      })
         .then(function (r) {
           return r.text();
         })
@@ -284,9 +219,7 @@
           if (!node) return;
           if (node.nodeType === 3) {
             var v = node.nodeValue;
-            if (v && v.indexOf("plural") !== -1) {
-              node.nodeValue = v.replace(re, "$2");
-            }
+            if (v && v.indexOf("plural") !== -1) node.nodeValue = v.replace(re, "$2");
             return;
           }
           if (node.nodeType === 1) {
@@ -301,7 +234,6 @@
     var n = 0;
     var timer = setInterval(function () {
       fixIcuText(document.body);
-      // Keep clearing any accidental re-injection of the shell overlay
       try {
         var el = document.getElementById("cosmic-shell-overlay");
         if (el && el.parentNode) el.parentNode.removeChild(el);

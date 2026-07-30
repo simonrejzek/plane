@@ -44,8 +44,8 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v20
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v19
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v18
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
 
       - name: Verify epic tour fallbacks + media in image context
@@ -76,7 +76,9 @@ jobs:
           test -f public/tips/download-app/light.webp
           # AI grey-screen surgical patches present
           grep -q "s=!0,c=!0" public/assets/detail-DFXDSk4X.js
-          grep -q "inject.js?v=28" public/index.html
+          grep -q "inject.js?v=29" public/index.html
+          grep -q "importmap" public/index.html
+          grep -q "patched-spa" public/index.html
           # At least 100 static media files shipped (empty-state illustrations)
           media_count=$(find public/assets -maxdepth 1 \( -name '*.webp' -o -name '*.png' -o -name '*.svg' -o -name '*.gif' \) | wc -l | tr -d ' ')
           test "$media_count" -ge 100
@@ -85,8 +87,8 @@ jobs:
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v19
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v19 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v19
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v19 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v18
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v20
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v20 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v20
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v20 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v19
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v20
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v19
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v18

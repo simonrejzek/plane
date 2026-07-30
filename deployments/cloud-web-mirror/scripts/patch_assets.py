@@ -123,6 +123,11 @@ AI_SELFHOST_SURGICAL = [
         "isWorkspaceFeatureEnabled=H((e,t)=>{if(t===bo.IS_CROSS_PROJECT_SUB_WORK_ITEMS_ENABLED)return!0;let n=this.featuresByWorkspaceSlug(e);return n?n?.[t]??!1:!1})",
         "isWorkspaceFeatureEnabled=H((e,t)=>{if(t===bo.IS_CROSS_PROJECT_SUB_WORK_ITEMS_ENABLED||t===bo.IS_PI_ENABLED||t===bo.IS_WIKI_ENABLED)return!0;let n=this.featuresByWorkspaceSlug(e);return n?n?.[t]??!1:!1})",
     ),
+    # Wiki layout: never show upgrade wall when is_wiki missing
+    (
+        "c=!a&&!s,d=Se(t,`PAGE_TEMPLATES`)",
+        "c=!1,d=Se(t,`PAGE_TEMPLATES`)",
+    ),
     # getInstance: never leave isWorkspaceAuthorized false (grey UnauthorizedView)
     (
         "getInstance=async e=>{try{let t=await this.piChatService.getInstance(e);return this.isWorkspaceAuthorized=t.is_authorized,C(()=>{this.hasAnyChats[e]=t.has_chats}),t}catch(e){console.error(`Failed to get instance information:`,e),this.isWorkspaceAuthorized=!1}}",
