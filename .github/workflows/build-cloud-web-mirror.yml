@@ -120,10 +120,7 @@ jobs:
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v37
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36
           docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v37 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v37
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v37 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v35
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v37 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v36
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v37
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v36
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v35
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v36
