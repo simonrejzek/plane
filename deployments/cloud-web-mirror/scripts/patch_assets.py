@@ -481,6 +481,115 @@ def ensure_lazy_module_fallback() -> None:
         )
 
 
+def ensure_issues_init_fetch_retries() -> None:
+    """Re-arm ListLayout init fetch; modules already fetch reliably.
+
+    ``use-initial-issues-fetch`` runs the init callback once via useLayoutEffect.
+    On project Work items (``/issues/``) that race is easy to lose: filters are
+    not in the MobX map yet, or PROJECT actions closed over empty router params,
+    so ``fetchIssues`` never hits the network — empty tray under Display/Add.
+    Module detail works because its leaf params include ``moduleId`` and filters
+    hydrate on a different path.
+
+    Retries at 300ms / 1.5s / 4s re-call the latest callback after filters land.
+    """
+    old = (
+        "function r(e,t){let[n,r]=(0,i.useState)(!0),a=(0,i.useRef)(e);"
+        "return(0,i.useLayoutEffect)(()=>{a.current=e}),"
+        "(0,i.useLayoutEffect)(()=>{a.current(),r(!1)},t),n}"
+    )
+    new = (
+        "function r(e,t){let[n,r]=(0,i.useState)(!0),a=(0,i.useRef)(e);"
+        "return(0,i.useLayoutEffect)(()=>{a.current=e}),"
+        "(0,i.useLayoutEffect)(()=>{let e=()=>{try{a.current&&a.current()}catch(e){}};"
+        "e(),r(!1);let t=setTimeout(e,300),n=setTimeout(e,1500),i=setTimeout(e,4e3);"
+        "return()=>{clearTimeout(t),clearTimeout(n),clearTimeout(i)}},t),n}"
+    )
+    n = 0
+    for path in ROOT.rglob("use-initial-issues-fetch-*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "setTimeout(e,300)" in raw:
+            print(f"init-fetch retries already: {path.name}")
+            continue
+        if old in raw:
+            path.write_text(raw.replace(old, new, 1), encoding="utf-8")
+            n += 1
+            print(f"init-fetch retries: {path.name}")
+        else:
+            print(f"WARN: init-fetch needle missing in {path.name}")
+    # Always derive PROJECT slug/id from pathname (leaf useParams can still lag)
+    for path in ROOT.rglob("use-issues-actions-*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        cond = (
+            "m=()=>{let{workspaceSlug:e,projectId:t}=s();"
+            "if(!e||!t){try{let m=(typeof location<`u`&&location.pathname||``)"
+            ".match(/^\\/([^/]+)\\/projects\\/([0-9a-fA-F-]{36})/);"
+            "if(m){e=e||m[1],t=t||m[2]}}catch(x){}}let n=e?.toString(),i=t?.toString(),"
+        )
+        always = (
+            "m=()=>{let{workspaceSlug:e,projectId:t}=s();"
+            "try{let m=(typeof location<`u`&&location.pathname||``)"
+            ".match(/^\\/([^/]+)\\/projects\\/([0-9a-fA-F-]{36})/);"
+            "if(m){e=m[1],t=m[2]}}catch(x){}let n=e?.toString(),i=t?.toString(),"
+        )
+        bare = (
+            "m=()=>{let{workspaceSlug:e,projectId:t}=s(),n=e?.toString(),i=t?.toString(),"
+            "{issues:a,issuesFilter:o}=l(r.PROJECT),"
+        )
+        bare_new = (
+            "m=()=>{let{workspaceSlug:e,projectId:t}=s();"
+            "try{let m=(typeof location<`u`&&location.pathname||``)"
+            ".match(/^\\/([^/]+)\\/projects\\/([0-9a-fA-F-]{36})/);"
+            "if(m){e=m[1],t=m[2]}}catch(x){}let n=e?.toString(),i=t?.toString(),"
+            "{issues:a,issuesFilter:o}=l(r.PROJECT),"
+        )
+        if "if(m){e=m[1],t=m[2]}" in raw:
+            print(f"actions always-path already: {path.name}")
+            continue
+        if cond in raw:
+            path.write_text(raw.replace(cond, always, 1), encoding="utf-8")
+            n += 1
+            print(f"actions always-path: {path.name}")
+        elif bare in raw:
+            path.write_text(raw.replace(bare, bare_new, 1), encoding="utf-8")
+            n += 1
+            print(f"actions path from bare: {path.name}")
+        else:
+            print(f"WARN: actions path needle missing in {path.name}")
+    # Seed default applied filters when project filter map not ready
+    gaf_old = (
+        "getAppliedFilters=e=>{if(!e)return;let t=this.getIssueFilters(e);if(!t)return;"
+        "let n=qi(t.displayFilters?.layout,`my_issues`);if(n)return this.computedFilteredParams(t,n)}"
+    )
+    gaf_new = (
+        "getAppliedFilters=e=>{if(!e)return;let t=this.getIssueFilters(e);"
+        "if(!t)t={displayFilters:{layout:`list`,group_by:`state`,order_by:`-created_at`},"
+        "displayProperties:{},richFilters:{},pqlFilters:{},kanbanFilters:{group_by:[],sub_group_by:[]}};"
+        "let n=qi(t.displayFilters?.layout||`list`,`my_issues`);"
+        "if(n)return this.computedFilteredParams(t,n);"
+        "return this.computedFilteredParams(t,`list`)}"
+    )
+    for path in ROOT.rglob("store-context*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "displayFilters:{layout:`list`,group_by:`state`,order_by:`-created_at`}" in raw and "getAppliedFilters=e=>{if(!e)return;let t=this.getIssueFilters(e);if(!t)t=" in raw:
+            print(f"getAppliedFilters seed already: {path.name}")
+            continue
+        if gaf_old in raw:
+            path.write_text(raw.replace(gaf_old, gaf_new), encoding="utf-8")
+            n += 1
+            print(f"getAppliedFilters seed: {path.name}")
+    print(f"issues init/fetch harden files: {n}")
+
+
 def ensure_use_params_merge_matches() -> None:
     """Merge React Router match params so Work items can fetch issues.
 
@@ -711,6 +820,7 @@ def main() -> int:
     ensure_board_groups_fallback()
     ensure_project_issues_board_mount()
     ensure_use_params_merge_matches()
+    ensure_issues_init_fetch_retries()
     fix_css_modulepreloads()
     namespace_release_assets()
     # re-apply after namespace so release copies also get board + css fixes
@@ -718,6 +828,7 @@ def main() -> int:
     ensure_board_groups_fallback()
     ensure_project_issues_board_mount()
     ensure_use_params_merge_matches()
+    ensure_issues_init_fetch_retries()
     fix_css_modulepreloads()
     return 0
 
