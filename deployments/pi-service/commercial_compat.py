@@ -18,6 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
+STATE_DIR = Path(os.environ.get("PI_STATE_DIR") or DATA_DIR)
 PLANE_API_BASE = (os.environ.get("PLANE_API_BASE") or "http://api:8000").rstrip("/")
 
 
@@ -39,7 +40,25 @@ OWNER_PERMISSIONS: Dict[str, Any] = _load(
 BUSINESS_FLAGS: Dict[str, Any] = _load("business_flags.json", {"values": {}})
 WORKSPACE_ROLES: List[Dict[str, Any]] = _load("workspace_roles.json", [])
 
-PREF_STORE: Dict[str, Dict[str, Any]] = {}
+PREF_STORE_PATH = STATE_DIR / "workspace_preferences.json"
+
+
+def _load_preference_store() -> Dict[str, Dict[str, Any]]:
+    stored = _load(str(PREF_STORE_PATH), {})
+    if not isinstance(stored, dict):
+        return {}
+    return {str(key): value for key, value in stored.items() if isinstance(value, dict)}
+
+
+def _persist_preference_store() -> None:
+    """Persist dismissals so container/service restarts cannot resurrect UI prompts."""
+    PREF_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = PREF_STORE_PATH.with_suffix(f"{PREF_STORE_PATH.suffix}.tmp")
+    temporary_path.write_text(json.dumps(PREF_STORE, sort_keys=True), encoding="utf-8")
+    temporary_path.replace(PREF_STORE_PATH)
+
+
+PREF_STORE: Dict[str, Dict[str, Any]] = _load_preference_store()
 # work-item votes: key = f"{project_id}:{issue_id}" -> list of vote dicts
 VOTE_STORE: Dict[str, List[Dict[str, Any]]] = {}
 # work-item updates (status posts): key same
@@ -1433,6 +1452,24 @@ def register_commercial_compat(app: FastAPI) -> None:
                 "ai": {"dismissed": True, "completed": True},
                 "wiki": {"dismissed": True, "completed": True},
             },
+            # Commercial workspace shell uses these maps for dismissible cards.
+            "tips": {"mobile_app_download": True},
+            "explored_features": {
+                "github_integrated": True,
+                "slack_integrated": True,
+                "ai_chat_tried": True,
+            },
+            "getting_started_checklist": {
+                "project_created": True,
+                "project_joined": True,
+                "work_item_created": True,
+                "team_members_invited": True,
+                "page_created": True,
+                "ai_chat_tried": True,
+                "integration_linked": True,
+                "view_created": True,
+                "sticky_created": True,
+            },
         }
 
     @app.get("/api/workspaces/{slug}/preferences/")
@@ -1456,7 +1493,7 @@ def register_commercial_compat(app: FastAPI) -> None:
         cur = dict(_default_preferences())
         cur.update(PREF_STORE.get(slug, {}) or {})
         if isinstance(patch, dict):
-            # Deep-merge nested tour maps so a partial patch can't re-open tours.
+            # Deep-merge preference maps so a partial dismissal keeps prior choices.
             for k, v in patch.items():
                 if isinstance(v, dict) and isinstance(cur.get(k), dict):
                     nested = dict(cur[k])
@@ -1465,6 +1502,7 @@ def register_commercial_compat(app: FastAPI) -> None:
                 else:
                     cur[k] = v
         PREF_STORE[slug] = cur
+        _persist_preference_store()
         return cur
 
     @app.get("/api/workspaces/{slug}/workflows/")
@@ -2347,6 +2385,7 @@ def register_commercial_compat(app: FastAPI) -> None:
         body["is_navigation_tour_completed"] = True
         body["is_onboarded"] = True
         body["is_mobile_onboarded"] = True
+        body["is_app_rail_docked"] = True
         body["onboarding_step"] = {
             "profile_complete": True,
             "workspace_create": True,
@@ -2389,6 +2428,7 @@ def register_commercial_compat(app: FastAPI) -> None:
             "is_tour_completed": True,
             "is_navigation_tour_completed": True,
             "is_onboarded": True,
+            "is_app_rail_docked": True,
         }
         status, body, _ = await ce_patch("/api/users/me/profile/", request, json_body=payload)
         if status >= 400:

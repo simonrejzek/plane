@@ -8,6 +8,7 @@ mirror needs to leave "Workspace not found".
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Tuple
 from unittest.mock import AsyncMock, patch
 
@@ -15,6 +16,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import commercial_compat
 from commercial_compat import (
     GRANTS_BY_RELATION,
     enrich_workspace,
@@ -159,6 +161,42 @@ def test_flags_all_enabled():
     assert values.get("AI_CHAT") is True
     assert values.get("APP_RAIL") is True
     assert all(v is True for v in values.values())
+
+
+def test_workspace_preferences_hide_dismissed_cards_and_persist(tmp_path, monkeypatch):
+    preference_file = tmp_path / "workspace_preferences.json"
+    monkeypatch.setattr(commercial_compat, "PREF_STORE_PATH", preference_file)
+    monkeypatch.setattr(commercial_compat, "PREF_STORE", {})
+
+    app = make_app()
+    with patch("commercial_compat.ce_get", new=AsyncMock(side_effect=_mock_ce)):
+        c = TestClient(app)
+        initial = c.get("/api/workspaces/cosmicboosts/preferences/")
+        updated = c.patch(
+            "/api/workspaces/cosmicboosts/preferences/",
+            json={"tips": {"future_tip": True}},
+        )
+        fetched = c.get("/api/workspaces/cosmicboosts/preferences/")
+
+    assert initial.status_code == 200
+    assert initial.json()["tips"]["mobile_app_download"] is True
+    assert initial.json()["explored_features"]["ai_chat_tried"] is True
+    assert all(initial.json()["getting_started_checklist"].values())
+    assert updated.status_code == 200
+    assert updated.json()["tips"] == {"mobile_app_download": True, "future_tip": True}
+    assert fetched.json()["tips"] == {"mobile_app_download": True, "future_tip": True}
+    assert preference_file.exists()
+    assert json.loads(preference_file.read_text(encoding="utf-8"))["cosmicboosts"]["tips"]["future_tip"] is True
+
+
+def test_user_profile_keeps_expanded_sidebar_docked():
+    app = make_app()
+    with patch("commercial_compat.ce_get", new=AsyncMock(side_effect=_mock_ce)):
+        c = TestClient(app)
+        response = c.get("/api/users/me/profile/")
+
+    assert response.status_code == 200
+    assert response.json()["is_app_rail_docked"] is True
 
 
 def test_features_and_workspaces_enrichment():
