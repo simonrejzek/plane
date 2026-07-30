@@ -36,6 +36,9 @@ LLM_BASE_URL = (os.environ.get("LLM_BASE_URL") or "https://openrouter.ai/api/v1"
 LLM_MODEL = os.environ.get("LLM_MODEL") or "deepseek/deepseek-v4-flash"
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER") or "custom"
 DEFAULT_MODEL_ID = os.environ.get("PI_DEFAULT_MODEL") or LLM_MODEL
+TRANSCRIPTION_MODEL = (
+    os.environ.get("TRANSCRIPTION_MODEL") or "openai/whisper-large-v3-turbo"
+)
 # Plane API for agent tools (create/edit work items, pages, etc.)
 PLANE_API_BASE = (os.environ.get("PLANE_API_BASE") or "http://api:8000").rstrip("/")
 CORS_ORIGINS = [
@@ -2431,7 +2434,7 @@ async def transcribe_audio(request: Request):
         "X-Title": "Plane Intelligence Transcription",
     }
     files = {"file": (filename, content, content_type)}
-    data = {"model": "openai/whisper-large-v3"}
+    data = {"model": TRANSCRIPTION_MODEL}
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             r = await client.post(url, headers=headers, files=files, data=data)
