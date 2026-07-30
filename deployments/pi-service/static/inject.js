@@ -16,7 +16,41 @@
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 27;
+  window.__cosmicInjectVersion = 28;
+
+  // Service worker: force patched AI/Wiki gate modules even when Cloudflare
+  // still has a 4h HIT of the unpatched commercial bundles (grey void).
+  (function registerAiGateSw() {
+    try {
+      if (!("serviceWorker" in navigator)) return;
+      navigator.serviceWorker
+        .register("/cosmic-pilot/sw-ai-gate.js", { scope: "/" })
+        .then(function (reg) {
+          try {
+            reg.update();
+          } catch (_) {}
+          // One reload per session so already-loaded modules pick up SW map
+          var key = "cosmic_ai_gate_sw_reloaded_v28";
+          if (!sessionStorage.getItem(key)) {
+            sessionStorage.setItem(key, "1");
+            // Only reload if we are past first paint and SW is controlling (or waiting)
+            var need =
+              location.pathname.indexOf("/ai-chat") !== -1 ||
+              location.pathname.indexOf("/wiki") !== -1;
+            if (need || !navigator.serviceWorker.controller) {
+              setTimeout(function () {
+                location.reload();
+              }, 400);
+            }
+          }
+        })
+        .catch(function (e) {
+          console.warn("cosmic ai-gate sw register failed", e);
+        });
+    } catch (e) {
+      console.warn("cosmic ai-gate sw", e);
+    }
+  })();
 
   // Remove any leftover overlay from previous inject versions
   try {

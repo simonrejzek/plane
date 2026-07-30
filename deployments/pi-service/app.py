@@ -1255,6 +1255,22 @@ def inject_js():
     return _inject_response()
 
 
+@app.get("/cosmic-pilot/sw-ai-gate.js")
+@app.get("/sw-ai-gate.js")
+def sw_ai_gate():
+    path = STATIC_DIR / "sw-ai-gate.js"
+    if not path.exists():
+        return HTMLResponse("// sw missing", status_code=500, media_type="application/javascript")
+    return FileResponse(
+        path,
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Service-Worker-Allowed": "/",
+        },
+    )
+
+
 @app.get("/cosmic-pilot/static/{asset_path:path}")
 def cosmic_static_asset(asset_path: str):
     """Serve static with no-cache so wiki/AI CSS isn't stuck on old dark void tokens."""
