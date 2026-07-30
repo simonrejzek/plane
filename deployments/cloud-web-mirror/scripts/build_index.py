@@ -2,9 +2,10 @@
 """Build SPA index.html from cloud shell. Safe dpl strip only; no head injection."""
 from __future__ import annotations
 import re
+import os
 from pathlib import Path
 
-PUBLIC = Path(__file__).resolve().parents[1] / "public"
+PUBLIC = Path(os.environ.get("CLOUD_MIRROR_PUBLIC", Path(__file__).resolve().parents[1] / "public"))
 SOURCE = PUBLIC / "index.source.html"
 OUT = PUBLIC / "index.html"
 

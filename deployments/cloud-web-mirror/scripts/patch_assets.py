@@ -16,10 +16,15 @@ Runtime inference never hits Plane cloud PI.
 from __future__ import annotations
 
 import re
+import os
+import shutil
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1] / "public" / "assets"
+PUBLIC = Path(os.environ.get("CLOUD_MIRROR_PUBLIC", Path(__file__).resolve().parents[1] / "public"))
+ROOT = PUBLIC / "assets"
+RELEASE = os.environ.get("CLOUD_MIRROR_RELEASE", "dev")
+RELEASE_ROOT = ROOT / "releases" / RELEASE
 
 # Replace cloud service bases with same-origin.
 # Empty string turns https://pi.plane.so/api/v1/... into /api/v1/...
@@ -90,6 +95,58 @@ def ensure_epic_migration_fallbacks() -> None:
             print(f"  cache-busted media urls in {path.name}")
 
 
+def namespace_release_assets() -> None:
+    """Publish one immutable, self-contained asset graph per mirror build.
+
+    The cloud bundle reuses hashed filenames across deployments.  Mutating those
+    filenames in place lets a browser/CDN combine modules from different builds,
+    which leaves the SPA mounted with an empty main element.  Copy the patched
+    graph under a build-specific prefix and make the document/bootstrap modules
+    reference that prefix instead.
+    """
+    if RELEASE_ROOT.exists():
+        shutil.rmtree(RELEASE_ROOT)
+    RELEASE_ROOT.mkdir(parents=True, exist_ok=True)
+    for source in ROOT.iterdir():
+        if source.name == "releases":
+            continue
+        target = RELEASE_ROOT / source.name
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+
+    prefix = f"/assets/releases/{RELEASE}/"
+    changed = 0
+    for path in PUBLIC.rglob("*"):
+        if not path.is_file() or RELEASE_ROOT in path.parents:
+            continue
+        if path.suffix not in {".js", ".css", ".html", ".json", ".map", ".svg"}:
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        updated = raw
+        # Rewrite each path form once.  The negative lookbehind prevents the
+        # final relative-path rule from matching the slash in an absolute URL.
+        updated = updated.replace("../assets/", f"../assets/releases/{RELEASE}/")
+        updated = updated.replace("./assets/", f"./assets/releases/{RELEASE}/")
+        updated = updated.replace("/assets/", prefix)
+        updated = re.sub(
+            r"(?<![./A-Za-z0-9_-])assets/",
+            f"assets/releases/{RELEASE}/",
+            updated,
+        )
+        if updated != raw:
+            path.write_text(updated, encoding="utf-8")
+            changed += 1
+    marker = RELEASE_ROOT / "detail-DFXDSk4X.js"
+    if not marker.exists():
+        raise SystemExit(f"ERROR: release asset graph missing {marker}")
+    print(f"release namespace: {RELEASE} ({changed} documents rewritten)")
+
+
 
 
 # Surgical commercial AI/Wiki self-host gates.
@@ -140,6 +197,8 @@ def apply_ai_selfhost_surgical() -> int:
     """Idempotent targeted fixes for commercial AI/Wiki grey screens."""
     n = 0
     for path in ROOT.rglob("*.js"):
+        if "releases" in path.relative_to(ROOT).parts:
+            continue
         try:
             raw = path.read_text(encoding="utf-8")
         except Exception:
@@ -176,6 +235,8 @@ def main() -> int:
     for path in ROOT.rglob("*"):
         if not path.is_file():
             continue
+        if "releases" in path.relative_to(ROOT).parts:
+            continue
         if path.suffix not in {".js", ".css", ".html", ".json", ".map"}:
             continue
         try:
@@ -192,6 +253,7 @@ def main() -> int:
     ai_n = apply_ai_selfhost_surgical()
     print(f"ai-selfhost surgical: {ai_n}")
     ensure_epic_migration_fallbacks()
+    namespace_release_assets()
     return 0
 
 

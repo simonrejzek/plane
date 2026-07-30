@@ -20,9 +20,13 @@ jobs:
       - name: Patch commercial assets + build index
         working-directory: deployments/cloud-web-mirror
         run: |
+          export CLOUD_MIRROR_RELEASE="r-${GITHUB_SHA::12}"
+          echo "CLOUD_MIRROR_RELEASE=$CLOUD_MIRROR_RELEASE" >> "$GITHUB_ENV"
           python3 scripts/patch_assets.py
           python3 scripts/build_index.py
           test -f public/index.html
+          test -f "public/assets/releases/$CLOUD_MIRROR_RELEASE/detail-DFXDSk4X.js"
+          grep -q "/assets/releases/$CLOUD_MIRROR_RELEASE/manifest-V6i18n.js" public/index.html
           # Safety: no remaining cloud PI host in primary bundles
           ! grep -R "https://pi.plane.so" public/assets/root-*.js public/assets/entry.client-*.js || (echo "PI host still present" && exit 1)
           ! grep -R "https://api.plane.so" public/assets/root-*.js public/assets/entry.client-*.js || (echo "API host still present" && exit 1)
@@ -46,6 +50,7 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v21
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v20
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-${{ github.sha }}
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
 
       - name: Verify epic tour fallbacks + media in image context
