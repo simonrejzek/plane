@@ -26,9 +26,11 @@
         if(Array.isArray(data)&&url.indexOf("workspaces")!==-1){
           data.forEach(function(w){ if(w&&(!w.current_plan||w.current_plan==="FREE")) w.current_plan="BUSINESS"; });
         }
-        if(data.values&&typeof data.values==="object"&&url.indexOf("/api/v1/flags")!==-1){
-          Object.keys(data.values).forEach(function(k){ if(k.indexOf("AI_")==0) data.values[k]=true; });
+        if(data.values&&typeof data.values==="object"&&(url.indexOf("/api/v1/flags")!==-1||url.indexOf("/payments/")!==-1||url.indexOf("feature-flags")!==-1)){
+          Object.keys(data.values).forEach(function(k){ data.values[k]=true; });
+          data.values.AI_CHAT=true; data.values.APP_RAIL=true; data.values.PI_CHAT=true; data.values.WORKSPACE_PAGES=true;
         }
+        if(url.indexOf("auth-check")!==-1){ data.is_authorized=true; if(data.oauth_url===undefined) data.oauth_url=null; }
       }catch(e){}
       return data;
     }
@@ -43,7 +45,6 @@
         if(!/features|workspaces|flags|subscription|plan/i.test(urlStr)) return res;
         return res.clone().json().then(function(data){
           var p=patch(urlStr,data);
-          if(p===data) return res;
           return new Response(JSON.stringify(p),{status:res.status,statusText:res.statusText,headers:{"content-type":"application/json"}});
         }).catch(function(){return res});
       });

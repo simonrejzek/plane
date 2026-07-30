@@ -1,19 +1,22 @@
 /**
- * Cosmic inject — soft fixes only.
+ * Cosmic inject — soft fixes only (v27).
  *
  * Do NOT overlay custom Wiki/AI shells. The commercial SPA already ships
  * real Wiki (:workspaceSlug/wiki) and AI (:workspaceSlug/ai-chat) route
- * modules (layout-CFpI-AZP, page-CvY-jB5L2, pi-chat layouts, etc.).
- * Overlaying /cosmic-pilot/* replaced app.plane.so UI with a homemade shell.
+ * modules. Overlaying /cosmic-pilot/* replaced app.plane.so UI with a
+ * homemade shell.
  *
- * This script only:
+ * This script:
  *  - merges fixed English i18n (ICU plurals)
  *  - marks product tours dismissed
  *  - soft-fixes raw ICU text that leaks into the DOM
+ *  - forces commercial PI/Wiki flags + auth-check success on XHR/fetch
+ *    so Plane AI cannot paint the empty/grey unauthorized void
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
+  window.__cosmicInjectVersion = 27;
 
   // Remove any leftover overlay from previous inject versions
   try {
@@ -22,10 +25,179 @@
     document.documentElement.removeAttribute("data-cosmic-shell");
   } catch (_) {}
 
+  // ---- Force PI/Wiki/AI API responses (XHR + fetch) ----
+  // Commercial SPA greys out AI when:
+  //   - isWorkspaceAuthorized is false (auth-check fail)
+  //   - is_pi_enabled missing (Upgrade wall)
+  //   - AI_CHAT aiFeatureFlags missing (notConfigured → 404 grey)
+  (function forcePiWikiFlags() {
+    function isTarget(url) {
+      if (!url) return null;
+      var u = String(url);
+      if (u.indexOf("/api/v1/chat/start/auth-check") !== -1) return "auth-check";
+      if (u.indexOf("/api/v1/flags") !== -1) return "v1-flags";
+      if (/\/api\/workspaces\/[^/]+\/features\/?(\?|$)/.test(u)) return "features";
+      if (/\/api\/payments\/workspaces\/[^/]+\/flags\/?(\?|$)/.test(u)) return "pay-flags";
+      if (u.indexOf("/api/feature-flags") !== -1) return "feature-flags";
+      return null;
+    }
+
+    function patchBody(kind, data) {
+      try {
+        if (data == null) data = {};
+        if (typeof data !== "object") return data;
+        if (kind === "auth-check") {
+          data.is_authorized = true;
+          if (data.oauth_url === undefined) data.oauth_url = null;
+          if (data.has_chats === undefined) data.has_chats = false;
+          return data;
+        }
+        if (kind === "features") {
+          data.is_pi_enabled = true;
+          data.is_wiki_enabled = true;
+          data.is_milestones_enabled = data.is_milestones_enabled !== false;
+          return data;
+        }
+        if (kind === "pay-flags" || kind === "v1-flags" || kind === "feature-flags") {
+          if (!data.values || typeof data.values !== "object") data.values = {};
+          var keys = [
+            "AI_CHAT",
+            "AI_DEDUPE",
+            "AI_CONVERSE",
+            "AI_FILE_UPLOADS",
+            "AI_PAGES_BLOCKS",
+            "AI_PAGES_SUMMARY",
+            "AI_LABEL_PREDICTION",
+            "AI_MCP_CONNECTORS",
+            "AI_TEXT_TO_PQL",
+            "AI_PAGES_EDIT",
+            "AI_AUTOPILOT",
+            "AI_SKILLS",
+            "PI_CHAT",
+            "PI_CHAT_MOBILE",
+            "APP_RAIL",
+            "WORKSPACE_PAGES",
+            "NESTED_PAGES",
+            "EDITOR_AI_OPS",
+            "BRIDGE",
+          ];
+          for (var i = 0; i < keys.length; i++) data.values[keys[i]] = true;
+          // feature-flags endpoint uses nested default map sometimes
+          if (data.default && typeof data.default === "object") {
+            for (var j = 0; j < keys.length; j++) data.default[keys[j]] = true;
+          }
+          return data;
+        }
+      } catch (_) {}
+      return data;
+    }
+
+    function rewriteResponseText(kind, text) {
+      try {
+        var data = JSON.parse(text);
+        data = patchBody(kind, data);
+        return JSON.stringify(data);
+      } catch (_) {
+        // If server returned non-JSON error, synthesize a good body for critical endpoints
+        if (kind === "auth-check") {
+          return JSON.stringify({ is_authorized: true, oauth_url: null, has_chats: false });
+        }
+        if (kind === "v1-flags" || kind === "pay-flags") {
+          return JSON.stringify({
+            values: {
+              AI_CHAT: true,
+              APP_RAIL: true,
+              PI_CHAT: true,
+              WORKSPACE_PAGES: true,
+            },
+          });
+        }
+        if (kind === "features") {
+          return JSON.stringify({
+            is_pi_enabled: true,
+            is_wiki_enabled: true,
+          });
+        }
+        return text;
+      }
+    }
+
+    // XHR (axios uses this)
+    try {
+      var XO = XMLHttpRequest.prototype.open;
+      var XS = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (method, url) {
+        this.__cosmicUrl = url;
+        this.__cosmicKind = isTarget(url);
+        return XO.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.send = function () {
+        var xhr = this;
+        var kind = xhr.__cosmicKind;
+        if (kind) {
+          xhr.addEventListener("readystatechange", function () {
+            if (xhr.readyState !== 4) return;
+            try {
+              var raw = xhr.responseText;
+              var fixed = rewriteResponseText(kind, raw);
+              if (fixed === raw) return;
+              try {
+                Object.defineProperty(xhr, "responseText", { get: function () { return fixed; } });
+              } catch (_) {}
+              try {
+                Object.defineProperty(xhr, "response", { get: function () { return fixed; } });
+              } catch (_) {}
+              // Force success status so catch paths don't set isWorkspaceAuthorized=false
+              try {
+                Object.defineProperty(xhr, "status", { get: function () { return 200; } });
+              } catch (_) {}
+            } catch (_) {}
+          });
+        }
+        return XS.apply(this, arguments);
+      };
+    } catch (e) {
+      console.warn("cosmic xhr patch failed", e);
+    }
+
+    // fetch (selfhost bootstrap + some clients)
+    try {
+      var _f = window.fetch;
+      window.fetch = function (input, init) {
+        var url =
+          typeof input === "string"
+            ? input
+            : input && input.url
+              ? input.url
+              : String(input);
+        var kind = isTarget(url);
+        return _f.call(this, input, init).then(function (res) {
+          if (!kind) return res;
+          return res
+            .clone()
+            .text()
+            .then(function (text) {
+              var fixed = rewriteResponseText(kind, text);
+              return new Response(fixed, {
+                status: 200,
+                statusText: "OK",
+                headers: { "content-type": "application/json" },
+              });
+            })
+            .catch(function () {
+              return res;
+            });
+        });
+      };
+    } catch (e) {
+      console.warn("cosmic fetch patch failed", e);
+    }
+  })();
+
   // ---- Fixed English i18n dictionary ----
   (function loadFixedI18n() {
     try {
-      var u = "/cosmic-pilot/en-i18n-fallbacks-v7.js?v=26";
+      var u = "/cosmic-pilot/en-i18n-fallbacks-v7.js?v=27";
       fetch(u, { credentials: "same-origin", cache: "no-store" })
         .then(function (r) {
           return r.text();

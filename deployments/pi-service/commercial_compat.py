@@ -757,15 +757,23 @@ def register_commercial_compat(app: FastAPI) -> None:
 
     @app.get("/api/workspaces/{slug}/features/")
     async def workspace_features_get(slug: str, request: Request):
+        # Selfhost: always expose PI/Wiki. Membership is best-effort for workspace id only.
+        # Never 404/403 the commercial SPA feature gate (blank Upgrade / grey AI wall).
         err_status, role, err_body = await resolve_membership(slug, request)
-        if err_status is not None:
-            return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
-        status, body, _ = await ce_get("/api/users/me/workspaces/", request)
+        if err_status == 401:
+            return JSONResponse(
+                err_body if isinstance(err_body, dict) else {"detail": "Authentication credentials were not provided."},
+                status_code=401,
+            )
         workspace_id = None
-        if status == 200 and isinstance(body, list):
-            match = next((w for w in body if isinstance(w, dict) and w.get("slug") == slug), None)
-            if match:
-                workspace_id = match.get("id")
+        try:
+            status, body, _ = await ce_get("/api/users/me/workspaces/", request)
+            if status == 200 and isinstance(body, list):
+                match = next((w for w in body if isinstance(w, dict) and w.get("slug") == slug), None)
+                if match:
+                    workspace_id = match.get("id")
+        except Exception:
+            pass
         return features_payload(workspace_id)
 
     @app.patch("/api/workspaces/{slug}/features/")
