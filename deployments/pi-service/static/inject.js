@@ -5,7 +5,7 @@
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 31;
+  window.__cosmicInjectVersion = 32;
 
   // Kill any SW left from v28 that could break navigation
   try {
@@ -99,10 +99,12 @@
       .forEach(function (k) { try { localStorage.setItem(k, "true"); } catch (_) {} });
   } catch (_) {}
 
-  // Dual sidebars: if APP_RAIL_${slug} is truthy the SPA treats the icon rail as collapsed/hidden.
+  // Dual sidebars: icon rail (APP_RAIL) + Projects panel (must not be collapsed/width 0)
   try {
     Object.keys(localStorage).forEach(function (k) {
       if (k.indexOf("APP_RAIL_") === 0) localStorage.removeItem(k);
     });
+    // SPA uses app_sidebar_collapsed=true → projects panel width 0 / hidden
+    localStorage.setItem("app_sidebar_collapsed", "false");
   } catch (_) {}
 })();
