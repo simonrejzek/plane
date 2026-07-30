@@ -668,6 +668,145 @@ def total_count_from_issues_body(body: Any) -> Dict[str, Any]:
         total_i = 0
     return {"total_count": total_i, "grouped_count": counts, "counts": counts}
 
+
+# CE group_by field → issue property for client-side regrouping.
+# Multi-value fields (assignees, labels, modules) can place one issue in many buckets.
+_CE_GROUP_TO_ISSUE_KEYS: Dict[str, Tuple[str, ...]] = {
+    "state_id": ("state_id", "state"),
+    "priority": ("priority",),
+    "assignees__id": ("assignee_ids", "assignees"),
+    "labels__id": ("label_ids", "labels"),
+    "created_by": ("created_by",),
+    "cycle_id": ("cycle_id", "cycle"),
+    "issue_module__module_id": ("module_ids", "modules"),
+    "project_id": ("project_id", "project"),
+    "state__group": ("state__group",),
+    "target_date": ("target_date",),
+    "start_date": ("start_date",),
+}
+
+
+def _issue_group_keys(issue: Dict[str, Any], group_by: str) -> List[str]:
+    """Return group bucket keys for one issue under a CE group_by field."""
+    keys = _CE_GROUP_TO_ISSUE_KEYS.get(group_by) or (group_by,)
+    values: List[Any] = []
+    for k in keys:
+        if k == "state__group":
+            detail = issue.get("state_detail")
+            if isinstance(detail, dict) and detail.get("group"):
+                values.append(detail.get("group"))
+            elif issue.get("state__group"):
+                values.append(issue.get("state__group"))
+            continue
+        v = issue.get(k)
+        if v is None:
+            continue
+        if isinstance(v, list):
+            values.extend(v)
+        elif isinstance(v, dict) and v.get("id") is not None:
+            values.append(v.get("id"))
+        else:
+            values.append(v)
+    if not values:
+        return ["None"]
+    out: List[str] = []
+    for v in values:
+        if v is None or v == "":
+            out.append("None")
+        else:
+            out.append(str(v))
+    # de-dupe preserve order
+    seen = set()
+    uniq: List[str] = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq or ["None"]
+
+
+def regroup_issues_by_ce_field(items: List[Dict[str, Any]], group_by: str) -> Dict[str, Any]:
+    """Build commercial processIssueResponse buckets from a flat issue list.
+
+    CE GroupedOffsetPaginator puts only the *global* page of issues into groups,
+    leaving many buckets as ``{results:[], total_results: N}``. The SPA then
+    paints headers with counts (e.g. Simon · 21) and **zero cards**.
+
+    Self-host boards are small enough that we can fetch a large flat page and
+    regroup fully so every non-empty group has its issue rows.
+    """
+    buckets: Dict[str, List[Dict[str, Any]]] = {}
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        issue = _normalize_issue_item(raw)
+        for gk in _issue_group_keys(issue, group_by):
+            buckets.setdefault(gk, []).append(issue)
+    results: Dict[str, Any] = {}
+    total = 0
+    seen_ids: set = set()
+    for gk, iss in buckets.items():
+        results[gk] = {"results": iss, "total_results": len(iss)}
+        for it in iss:
+            iid = it.get("id")
+            if iid is not None and iid not in seen_ids:
+                seen_ids.add(iid)
+                total += 1
+    # unique issue count
+    total = len(seen_ids)
+    return {
+        "results": results,
+        "total_count": total,
+        "total_results": total,
+        "count": total,
+        "next_cursor": None,
+        "prev_cursor": None,
+        "next_page_results": False,
+        "prev_page_results": False,
+        "grouped_by": group_by,
+        "sub_grouped_by": None,
+        "extra_stats": None,
+        "referenced_resources": {},
+        "total_groups": len(results),
+        "next_group_offset": None,
+    }
+
+
+def grouped_response_has_empty_cards(body: Any) -> bool:
+    """True when any group advertises total_results>0 but has no issue rows."""
+    if not isinstance(body, dict):
+        return False
+    results = body.get("results")
+    if not isinstance(results, dict) or not results:
+        return False
+    saw_count = False
+    saw_rows = False
+    empty_with_count = False
+    for bucket in results.values():
+        if isinstance(bucket, list):
+            if bucket:
+                saw_rows = True
+            continue
+        if not isinstance(bucket, dict):
+            continue
+        rows = bucket.get("results")
+        n_rows = len(rows) if isinstance(rows, list) else 0
+        try:
+            total = int(bucket.get("total_results") or bucket.get("total_count") or n_rows or 0)
+        except Exception:
+            total = n_rows
+        if total > 0:
+            saw_count = True
+        if n_rows > 0:
+            saw_rows = True
+        if total > 0 and n_rows == 0:
+            empty_with_count = True
+    # classic bug: headers with counts, zero cards anywhere
+    if empty_with_count and not saw_rows:
+        return True
+    # or mixed: some columns empty with counts (still broken for those columns)
+    return empty_with_count and saw_count
+
 def enrich_workspace(ws: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(ws)
     role = out.get("role")
@@ -1139,8 +1278,13 @@ def register_commercial_compat(app: FastAPI) -> None:
 
         Auth is delegated to CE (cookie/session). We intentionally skip PI
         resolve_membership so a membership-endpoint mismatch cannot blank the board.
+
+        When CE returns grouped buckets with total_results>0 and empty results
+        (global page didn't include those issues), re-fetch a large flat page and
+        regroup so cards actually appear under headers (CosmicBoosts blank board).
         """
         q = clean_ce_issue_params(dict(request.query_params))
+        group_by = q.get("group_by")
         status, body, _ = await ce_get(
             f"/api/workspaces/{slug}/projects/{project_id}/issues/",
             request,
@@ -1152,6 +1296,47 @@ def register_commercial_compat(app: FastAPI) -> None:
                 status_code=status,
             )
         out = normalize_issues_list_response(body)
+
+        # Fix "Simon · 21" headers with zero cards: CE grouped page is sparse.
+        if group_by and grouped_response_has_empty_cards(out):
+            flat_q = dict(q)
+            flat_q.pop("group_by", None)
+            flat_q.pop("sub_group_by", None)
+            flat_q["per_page"] = "200"
+            flat_q["cursor"] = "200:0:0"
+            st2, body2, _ = await ce_get(
+                f"/api/workspaces/{slug}/projects/{project_id}/issues/",
+                request,
+                params=flat_q,
+            )
+            if st2 == 200:
+                flat_items: List[Dict[str, Any]] = []
+                if isinstance(body2, list):
+                    flat_items = [x for x in body2 if isinstance(x, dict)]
+                elif isinstance(body2, dict):
+                    r = body2.get("results")
+                    if isinstance(r, list):
+                        flat_items = [x for x in r if isinstance(x, dict)]
+                    elif isinstance(r, dict):
+                        # already grouped — flatten rows
+                        for bucket in r.values():
+                            if isinstance(bucket, dict) and isinstance(bucket.get("results"), list):
+                                flat_items.extend(
+                                    [x for x in bucket["results"] if isinstance(x, dict)]
+                                )
+                            elif isinstance(bucket, list):
+                                flat_items.extend([x for x in bucket if isinstance(x, dict)])
+                if flat_items:
+                    out = regroup_issues_by_ce_field(flat_items, str(group_by))
+                    out = normalize_issues_list_response(out)
+
+        # Flat list while SPA still has group_by → regroup so columns get rows
+        if group_by and isinstance(out.get("results"), list) and out["results"]:
+            out = regroup_issues_by_ce_field(
+                [x for x in out["results"] if isinstance(x, dict)], str(group_by)
+            )
+            out = normalize_issues_list_response(out)
+
         # Enrich module names so board cards don't flash UUIDs
         try:
             mod_map = await _module_name_map(slug, project_id, request)

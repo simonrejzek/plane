@@ -275,6 +275,34 @@ def test_clean_and_normalize_issue_helpers():
 
 
 
+def test_regroup_issues_fills_empty_group_cards():
+    """CE sparse groups (total_results>0, results=[]) must be rebuildable."""
+    from commercial_compat import (
+        grouped_response_has_empty_cards,
+        regroup_issues_by_ce_field,
+    )
+
+    sparse = {
+        "results": {
+            "user-1": {"results": [], "total_results": 21},
+            "None": {"results": [], "total_results": 0},
+        },
+        "total_count": 21,
+    }
+    assert grouped_response_has_empty_cards(sparse) is True
+
+    flat = [
+        {"id": "i1", "name": "A", "assignee_ids": ["user-1"], "state_id": "s1"},
+        {"id": "i2", "name": "B", "assignee_ids": ["user-1"], "state_id": "s1"},
+        {"id": "i3", "name": "C", "assignee_ids": [], "state_id": "s2"},
+    ]
+    regrouped = regroup_issues_by_ce_field(flat, "assignees__id")
+    assert "user-1" in regrouped["results"]
+    assert len(regrouped["results"]["user-1"]["results"]) == 2
+    assert regrouped["results"]["user-1"]["total_results"] == 2
+    assert grouped_response_has_empty_cards(regrouped) is False
+
+
 def test_normalize_projects_list_wraps_ce_array():
     from commercial_compat import normalize_projects_list_response
 
