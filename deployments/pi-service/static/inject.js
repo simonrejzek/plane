@@ -1,15 +1,20 @@
 /**
- * Cosmic inject v33 — dual sidebars only.
+ * Cosmic inject v34 — dual sidebars only.
  * No service workers. No reloads. No import maps. No module remaps.
  *
  * Keeps APP_RAIL on (icon rail) and forces the Projects panel expanded.
- * The commercial SPA hides that panel when app_sidebar_collapsed===true
- * (layout width 0) or when theme sidebarCollapsed hydrates to true.
+ *
+ * Why CSS/DOM as well as localStorage:
+ * The commercial SPA hydrates MobX `sidebarCollapsed` once from
+ * `app_sidebar_collapsed`. After that, rewriting localStorage alone does
+ * nothing — ResizableSidebar keeps `#main-sidebar` at width 0. We therefore
+ * (1) keep the storage key false, (2) block setItem(true), (3) force the
+ * real #main-sidebar open via CSS + optional toggle click.
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 33;
+  window.__cosmicInjectVersion = 34;
 
   // Kill any SW left from broken experiments
   try {
@@ -37,7 +42,7 @@
    * Exact keys the mirrored SPA reads for dual-sidebar layout:
    * - payments/feature flags: APP_RAIL
    * - theme hydrate (store-wrapper): app_sidebar_collapsed
-   * - projects panel width (layout-DPbuSs0c / _sidebar): sidebarWidth (JSON number)
+   * - projects panel width (layout / useLocalStorage): sidebarWidth (JSON number)
    * - hide-rail keys: APP_RAIL_${slug}
    */
   function expandDualSidebars() {
@@ -62,8 +67,74 @@
     } catch (_) {}
   }
 
+  // Prevent SPA / toggle from re-collapsing via storage after we expand
+  try {
+    var _setItem = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = function (key, value) {
+      if (key === "app_sidebar_collapsed" && String(value) === "true") {
+        return _setItem(key, "false");
+      }
+      return _setItem(key, value);
+    };
+  } catch (_) {}
+
+  // CSS force: ResizableSidebar sets inline width:0 when MobX says collapsed.
+  // !important beats those inline styles so the Projects panel stays visible.
+  function injectForceOpenCss() {
+    try {
+      if (document.getElementById("cosmic-force-projects-sidebar")) return;
+      var style = document.createElement("style");
+      style.id = "cosmic-force-projects-sidebar";
+      style.textContent = [
+        "/* Cosmic dual-sidebar: keep Projects panel open beside app rail */",
+        "#main-sidebar{",
+        "  width:250px !important;",
+        "  min-width:250px !important;",
+        "  max-width:350px !important;",
+        "  opacity:1 !important;",
+        "  transform:translateX(0) !important;",
+        "  pointer-events:auto !important;",
+        "}",
+        /* spacer fallback while ProjectAppSidebar lazy-loads */
+        'div.h-full.shrink-0.bg-surface-1[aria-hidden="true"]{',
+        "  width:250px !important;",
+        "}",
+      ].join("\n");
+      var root = document.head || document.documentElement;
+      root.appendChild(style);
+    } catch (_) {}
+  }
+
+  function forceMainSidebarDom() {
+    try {
+      var el = document.getElementById("main-sidebar");
+      if (!el) return;
+      var rect = el.getBoundingClientRect();
+      if (rect.width >= 180) return;
+      // Prefer real React toggle so MobX matches visible state
+      try {
+        var toggles = document.querySelectorAll(
+          'button[aria-label*="sidebar" i], button[aria-label*="Sidebar" i]'
+        );
+        for (var i = 0; i < toggles.length; i++) {
+          var b = toggles[i];
+          if (b && typeof b.click === "function") {
+            b.click();
+            break;
+          }
+        }
+      } catch (_) {}
+      el.style.setProperty("width", "250px", "important");
+      el.style.setProperty("min-width", "250px", "important");
+      el.style.setProperty("max-width", "350px", "important");
+      el.style.setProperty("opacity", "1", "important");
+      el.style.setProperty("transform", "translateX(0)", "important");
+    } catch (_) {}
+  }
+
   // Run immediately (may still lose to deferred order; early index script also runs)
   expandDualSidebars();
+  injectForceOpenCss();
 
   // Soft-force critical flags (APP_RAIL must stay true for icon rail)
   (function forceFlags() {
@@ -176,20 +247,47 @@
     });
   } catch (_) {}
 
-  // Re-apply after SPA theme hydrate (store-wrapper reads app_sidebar_collapsed once).
-  // No full-page reloads — only preference re-write + storage events.
+  // Re-apply after SPA theme hydrate. No full-page reloads.
   var ticks = 0;
   var timer = setInterval(function () {
     expandDualSidebars();
+    injectForceOpenCss();
+    forceMainSidebarDom();
     ticks += 1;
-    if (ticks >= 24) clearInterval(timer); // ~6s
+    if (ticks >= 40) clearInterval(timer); // ~10s
   }, 250);
 
-  // Also on focus / visibility (user returns to tab after SPA mounted)
+  // Keep CSS in DOM if SPA rewrites head; re-check panel on navigation
+  try {
+    if (typeof MutationObserver !== "undefined") {
+      var mo = new MutationObserver(function () {
+        injectForceOpenCss();
+        forceMainSidebarDom();
+      });
+      mo.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+      setTimeout(function () {
+        try {
+          mo.disconnect();
+        } catch (_) {}
+      }, 15000);
+    }
+  } catch (_) {}
+
   try {
     document.addEventListener("visibilitychange", function () {
-      if (!document.hidden) expandDualSidebars();
+      if (!document.hidden) {
+        expandDualSidebars();
+        injectForceOpenCss();
+        forceMainSidebarDom();
+      }
     });
-    window.addEventListener("focus", expandDualSidebars);
+    window.addEventListener("focus", function () {
+      expandDualSidebars();
+      injectForceOpenCss();
+      forceMainSidebarDom();
+    });
   } catch (_) {}
 })();

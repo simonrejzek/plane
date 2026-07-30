@@ -21,7 +21,9 @@ def test_inject_source_forces_dual_sidebars() -> None:
     assert "JSON.stringify(250)" in text
     assert "location.reload" not in text
     assert "importmap" not in text
-    assert "__cosmicInjectVersion = 33" in text
+    assert "__cosmicInjectVersion = 34" in text
+    assert "cosmic-force-projects-sidebar" in text
+    assert "main-sidebar" in text
 
 
 def test_index_early_prefs_and_inject_version() -> None:
@@ -29,7 +31,7 @@ def test_index_early_prefs_and_inject_version() -> None:
     assert "cosmic-dual-sidebar-prefs" in html
     assert 'app_sidebar_collapsed", "false"' in html
     assert "sidebarWidth" in html
-    assert re.search(r"inject\.js\?v=33", html)
+    assert re.search(r"inject\.js\?v=34", html)
     assert html.find("cosmic-dual-sidebar-prefs") < html.find("entry.client")
 
 
@@ -70,21 +72,45 @@ def test_execute_inject_sets_localstorage_keys() -> None:
         });
         global.localStorage = ls;
         global.sessionStorage = ls;
+        const nodes = {};
+        const documentElement = {
+          removeAttribute() {},
+        };
+        const head = {
+          appendChild(el) {
+            if (el && el.id) nodes[el.id] = el;
+            return el;
+          },
+        };
+        const document = {
+          head,
+          documentElement,
+          getElementById(id) {
+            return nodes[id] || null;
+          },
+          createElement(tag) {
+            return {
+              tagName: String(tag).toUpperCase(),
+              id: "",
+              textContent: "",
+            };
+          },
+          addEventListener() {},
+          querySelectorAll() { return []; },
+        };
         global.window = {
           localStorage: ls,
           sessionStorage: ls,
-          document: {
-            getElementById: () => null,
-            documentElement: { removeAttribute() {} },
-            addEventListener() {},
-          },
+          document,
+          documentElement,
           addEventListener() {},
           dispatchEvent() { return true; },
           __cosmicShellInjected: false,
         };
-        global.document = global.window.document;
+        global.document = document;
         global.CustomEvent = function CustomEvent() {};
         global.Event = function Event() {};
+        global.MutationObserver = function () { this.observe = () => {}; this.disconnect = () => {}; };
         global.XMLHttpRequest = function XMLHttpRequest() {};
         global.XMLHttpRequest.prototype = {
           open() {},
@@ -93,14 +119,18 @@ def test_execute_inject_sets_localstorage_keys() -> None:
         };
         global.setInterval = () => 0;
         global.clearInterval = () => {};
+        global.setTimeout = () => 0;
         global.console = { warn() {}, log() {}, error() {} };
         const code = fs.readFileSync(process.argv[1], 'utf8');
         eval(code);
+        // setItem(true) must be forced back to false
+        ls.setItem('app_sidebar_collapsed', 'true');
         const out = {
           collapsed: ls.getItem('app_sidebar_collapsed'),
           width: ls.getItem('sidebarWidth'),
           hasRailKey: Object.keys(store).some((k) => k.startsWith('APP_RAIL_')),
           version: global.window.__cosmicInjectVersion,
+          forceCss: !!global.document.getElementById('cosmic-force-projects-sidebar'),
         };
         process.stdout.write(JSON.stringify(out));
         """
@@ -116,7 +146,8 @@ def test_execute_inject_sets_localstorage_keys() -> None:
     assert out["collapsed"] == "false", out
     assert json.loads(out["width"]) == 250, out
     assert out["hasRailKey"] is False, out
-    assert out["version"] == 33, out
+    assert out["version"] == 34, out
+    assert out["forceCss"] is True, out
 
 
 if __name__ == "__main__":

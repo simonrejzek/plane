@@ -48,8 +48,8 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v25
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v24
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v23
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-${{ github.sha }}
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
 
@@ -82,7 +82,7 @@ jobs:
           # AI grey-screen surgical patches present
           grep -q "s=!0,c=!0" public/assets/detail-DFXDSk4X.js
           grep -q 'e._result?.default||(()=>null)' public/assets/chunk-IJF3QNGC-D_ocRA8b.js
-          grep -q "inject.js?v=33" public/index.html
+          grep -q "inject.js?v=34" public/index.html
           # At least 100 static media files shipped (empty-state illustrations)
           media_count=$(find public/assets -maxdepth 1 \( -name '*.webp' -o -name '*.png' -o -name '*.svg' -o -name '*.gif' \) | wc -l | tr -d ' ')
           test "$media_count" -ge 100
@@ -91,8 +91,8 @@ jobs:
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v24
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v24 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v24
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v24 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v23
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v25
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v25 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v25
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v25 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v24
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v25
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v24
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v23
