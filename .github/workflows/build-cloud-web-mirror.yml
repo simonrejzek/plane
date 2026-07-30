@@ -91,9 +91,16 @@ jobs:
           ! grep -R -q "ingest:()=>!0" public/assets/store-context*.js
           # Board mount: project page must not require hydrated filters ( !o gate )
           grep -R -l "PROJECT_ISSUES_" public/assets/page-*.js | head -1 | xargs -I{} grep -q '!n||!r?(0,' {}
-          # Double-nested release paths 404 ListLayout (blank Work items board)
-          ! grep -R -l "/assets/releases/.*/releases/" public/assets/releases/"$CLOUD_MIRROR_RELEASE"/*.js \
-            || (echo "double-nested release paths in mapDeps" && exit 1)
+          # Double-nested release paths 404 ListLayout (blank Work items board).
+          # Use a path-segment pattern (no quotes) so adjacent mapDeps URLs on
+          # one line do not false-positive via greedy .* across entries.
+          if grep -R -n -E '/assets/releases/[^/"'"'"']+/releases/' \
+              public/assets/releases/"$CLOUD_MIRROR_RELEASE" --include='*.js' | head -5 | grep -q .; then
+            echo "double-nested release paths in mapDeps" >&2
+            grep -R -n -E '/assets/releases/[^/"'"'"']+/releases/' \
+              public/assets/releases/"$CLOUD_MIRROR_RELEASE" --include='*.js' | head -20 >&2
+            exit 1
+          fi
           grep -q "releases/(?<rel>" nginx.conf
           node --check public/assets/sidebar-wrapper-v7tips.js
           # Sidebar bare keys must not be minified 2-letter junk

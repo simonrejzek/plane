@@ -323,8 +323,14 @@ def namespace_release_assets() -> None:
             continue
         updated = raw
         # Collapse any existing release prefix back to plain /assets/ first.
-        updated = prior_release.sub("/assets/", updated)
-        updated = prior_release_rel.sub("assets/", updated)
+        # Multi-pass: double-nested .../releases/old/releases/dev/... needs
+        # two collapses before we re-apply the current prefix.
+        for _ in range(4):
+            nxt = prior_release.sub("/assets/", updated)
+            nxt = prior_release_rel.sub("assets/", nxt)
+            if nxt == updated:
+                break
+            updated = nxt
         # Rewrite each path form once.  The negative lookbehind prevents the
         # final relative-path rule from matching the slash in an absolute URL.
         updated = updated.replace("../assets/", f"../assets/releases/{RELEASE}/")
@@ -350,7 +356,10 @@ def namespace_release_assets() -> None:
             raw = path.read_text(encoding="utf-8")
             if re.search(rf"/assets/(?!releases/{re.escape(RELEASE)}/)", raw):
                 stale_refs.append(path.relative_to(RELEASE_ROOT))
-            if re.search(r"/assets/releases/[^/]+/releases/", raw):
+            # Require a path segment (no quotes) so adjacent mapDeps entries
+            # like "/assets/releases/r/a.js","/assets/releases/r/b.js" do not
+            # false-positive on a cross-entry .* match.
+            if re.search(r"/assets/releases/[^/\"']+/releases/", raw):
                 double_nested.append(path.relative_to(RELEASE_ROOT))
         except Exception:
             continue
