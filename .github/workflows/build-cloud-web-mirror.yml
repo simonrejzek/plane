@@ -81,6 +81,7 @@ jobs:
           test -f public/tips/download-app/light.webp
           # AI grey-screen surgical patches present
           grep -q "s=!0,c=!0" public/assets/detail-DFXDSk4X.js
+          grep -q 'e._result?.default||(()=>null)' public/assets/chunk-IJF3QNGC-D_ocRA8b.js
           grep -q "inject.js?v=30" public/index.html
           # At least 100 static media files shipped (empty-state illustrations)
           media_count=$(find public/assets -maxdepth 1 \( -name '*.webp' -o -name '*.png' -o -name '*.svg' -o -name '*.gif' \) | wc -l | tr -d ' ')

@@ -244,6 +244,36 @@ def apply_ai_selfhost_surgical() -> int:
     return n
 
 
+def ensure_lazy_module_fallback() -> None:
+    """Keep an optional lazy module from taking down the entire SPA.
+
+    The mirrored commercial bundle has a delayed optional component whose
+    loader can resolve without a module on self-host. React's production lazy
+    initializer assumes every successful promise resolves to
+    ``{ default: Component }`` and otherwise throws while reading ``default``.
+    Render nothing for that missing optional component so the surrounding
+    dashboard, Wiki, and AI routes remain interactive.
+    """
+    targets = list(ROOT.glob("chunk-IJF3QNGC-*.js"))
+    old = "if(e._status===1)return e._result.default;throw e._result"
+    new = "if(e._status===1)return e._result?.default||(()=>null);throw e._result"
+    patched = 0
+    for path in targets:
+        raw = path.read_text(encoding="utf-8")
+        if new in raw:
+            patched += 1
+            continue
+        if old not in raw:
+            continue
+        path.write_text(raw.replace(old, new, 1), encoding="utf-8")
+        patched += 1
+        print(f"lazy-module fallback: {path.name}")
+    if patched != 1:
+        raise SystemExit(
+            f"ERROR: expected one React lazy initializer, patched {patched}"
+        )
+
+
 def main() -> int:
     if not ROOT.is_dir():
         print(f"missing assets dir: {ROOT}", file=sys.stderr)
@@ -270,6 +300,7 @@ def main() -> int:
     print(f"done: {files} files, {changes} replacements")
     ai_n = apply_ai_selfhost_surgical()
     print(f"ai-selfhost surgical: {ai_n}")
+    ensure_lazy_module_fallback()
     ensure_epic_migration_fallbacks()
     namespace_release_assets()
     return 0
