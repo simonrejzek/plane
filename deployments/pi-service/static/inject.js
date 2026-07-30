@@ -1,5 +1,5 @@
 /**
- * Cosmic inject v34 — dual sidebars only.
+ * Cosmic inject v35 — dual sidebars + board group_by coerce.
  * No service workers. No reloads. No import maps. No module remaps.
  *
  * Keeps APP_RAIL on (icon rail) and forces the Projects panel expanded.
@@ -10,11 +10,16 @@
  * nothing — ResizableSidebar keeps `#main-sidebar` at width 0. We therefore
  * (1) keep the storage key false, (2) block setItem(true), (3) force the
  * real #main-sidebar open via CSS + optional toggle click.
+ *
+ * Board blank with "Work items N": commercial SPA group_by type/parent_type
+ * needs work-item-types (CE empty) / parent_type always void 0 →
+ * getGroupByColumns returns undefined → if (!groups) return null.
+ * Coerce those display filters to "state" in localStorage + user-properties.
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 34;
+  window.__cosmicInjectVersion = 35;
 
   // Kill any SW left from broken experiments
   try {
@@ -37,6 +42,101 @@
     if (old && old.parentNode) old.parentNode.removeChild(old);
     document.documentElement.removeAttribute("data-cosmic-shell");
   } catch (_) {}
+
+  /** Commercial-only group keys that blank the CE board. */
+  var BAD_GROUP_BY = {
+    type: 1,
+    parent_type: 1,
+    type_id: 1,
+    parent_id: 1,
+  };
+
+  function isBadGroupBy(v) {
+    return v != null && BAD_GROUP_BY[String(v)] === 1;
+  }
+
+  function coerceDisplayFilters(df) {
+    if (!df || typeof df !== "object") return false;
+    var changed = false;
+    if (isBadGroupBy(df.group_by)) {
+      df.group_by = "state";
+      changed = true;
+    }
+    if (isBadGroupBy(df.sub_group_by)) {
+      df.sub_group_by = null;
+      changed = true;
+    }
+    return changed;
+  }
+
+  /** Walk any JSON tree and fix display_filters.group_by in place. */
+  function coerceGroupByDeep(node) {
+    if (!node || typeof node !== "object") return false;
+    var changed = false;
+    if (Object.prototype.hasOwnProperty.call(node, "display_filters")) {
+      if (coerceDisplayFilters(node.display_filters)) changed = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(node, "group_by") && isBadGroupBy(node.group_by)) {
+      // bare display-filter objects
+      if (
+        Object.prototype.hasOwnProperty.call(node, "layout") ||
+        Object.prototype.hasOwnProperty.call(node, "order_by") ||
+        Object.prototype.hasOwnProperty.call(node, "sub_group_by")
+      ) {
+        node.group_by = "state";
+        changed = true;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(node, "sub_group_by") && isBadGroupBy(node.sub_group_by)) {
+      if (
+        Object.prototype.hasOwnProperty.call(node, "layout") ||
+        Object.prototype.hasOwnProperty.call(node, "order_by") ||
+        Object.prototype.hasOwnProperty.call(node, "group_by")
+      ) {
+        node.sub_group_by = null;
+        changed = true;
+      }
+    }
+    if (Array.isArray(node)) {
+      for (var i = 0; i < node.length; i++) {
+        if (coerceGroupByDeep(node[i])) changed = true;
+      }
+    } else {
+      for (var k in node) {
+        if (!Object.prototype.hasOwnProperty.call(node, k)) continue;
+        var v = node[k];
+        if (v && typeof v === "object") {
+          if (coerceGroupByDeep(v)) changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
+  function coerceIssueLocalFiltersRaw(raw) {
+    if (raw == null || raw === "") return { value: raw, changed: false };
+    try {
+      var parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!coerceGroupByDeep(parsed)) {
+        return { value: typeof raw === "string" ? raw : JSON.stringify(parsed), changed: false };
+      }
+      return { value: JSON.stringify(parsed), changed: true };
+    } catch (_) {
+      return { value: raw, changed: false };
+    }
+  }
+
+  function coerceIssueLocalFiltersStorage() {
+    try {
+      var raw = localStorage.getItem("issue_local_filters");
+      if (!raw) return;
+      var out = coerceIssueLocalFiltersRaw(raw);
+      if (out.changed) {
+        // use native setItem if we already wrapped it
+        localStorage.setItem("issue_local_filters", out.value);
+      }
+    } catch (_) {}
+  }
 
   /**
    * Exact keys the mirrored SPA reads for dual-sidebar layout:
@@ -68,16 +168,23 @@
   }
 
   // Prevent SPA / toggle from re-collapsing via storage after we expand
+  // Also coerce bad board group_by when SPA writes issue_local_filters.
   try {
     var _setItem = localStorage.setItem.bind(localStorage);
     localStorage.setItem = function (key, value) {
       if (key === "app_sidebar_collapsed" && String(value) === "true") {
         return _setItem(key, "false");
       }
+      if (key === "issue_local_filters") {
+        var c = coerceIssueLocalFiltersRaw(value);
+        return _setItem(key, c.value);
+      }
       return _setItem(key, value);
     };
   } catch (_) {}
 
+  // Fix any already-persisted type/parent_type grouping before SPA hydrates.
+  coerceIssueLocalFiltersStorage();
   // CSS force: ResizableSidebar sets inline width:0 when MobX says collapsed.
   // !important beats those inline styles so the Projects panel stays visible.
   function injectForceOpenCss() {
@@ -137,6 +244,7 @@
   injectForceOpenCss();
 
   // Soft-force critical flags (APP_RAIL must stay true for icon rail)
+  // + coerce type/parent_type group_by on user-properties responses.
   (function forceFlags() {
     function kindOf(url) {
       if (!url) return null;
@@ -145,6 +253,8 @@
       if (u.indexOf("/api/v1/flags") !== -1) return "flags";
       if (/\/api\/workspaces\/[^/]+\/features\/?(\?|$)/.test(u)) return "features";
       if (/\/api\/payments\/workspaces\/[^/]+\/flags/.test(u)) return "flags";
+      // Project/cycle/module/workspace user-properties hold display_filters.group_by
+      if (u.indexOf("/user-properties") !== -1) return "userprops";
       return null;
     }
     function patch(kind, data) {
@@ -166,19 +276,41 @@
           data.values.WORKSPACE_PAGES = true;
           data.values.PI_CHAT = true;
         }
+        if (kind === "userprops") {
+          coerceGroupByDeep(data);
+        }
       } catch (_) {}
       return data;
+    }
+    function maybeCoerceBody(body) {
+      if (body == null || body === "") return body;
+      try {
+        if (typeof body === "string") {
+          var parsed = JSON.parse(body);
+          if (coerceGroupByDeep(parsed)) return JSON.stringify(parsed);
+          return body;
+        }
+        if (typeof body === "object" && !(typeof Blob !== "undefined" && body instanceof Blob)) {
+          coerceGroupByDeep(body);
+        }
+      } catch (_) {}
+      return body;
     }
     try {
       var XO = XMLHttpRequest.prototype.open,
         XS = XMLHttpRequest.prototype.send;
       XMLHttpRequest.prototype.open = function (m, url) {
         this.__k = kindOf(url);
+        this.__m = m ? String(m).toUpperCase() : "GET";
         return XO.apply(this, arguments);
       };
-      XMLHttpRequest.prototype.send = function () {
+      XMLHttpRequest.prototype.send = function (body) {
         var x = this,
           k = x.__k;
+        // Coerce PATCH/PUT bodies so SPA can't re-persist type grouping
+        if (k === "userprops" && body != null) {
+          body = maybeCoerceBody(body);
+        }
         if (k) {
           x.addEventListener("readystatechange", function () {
             if (x.readyState !== 4) return;
@@ -203,7 +335,7 @@
             } catch (_) {}
           });
         }
-        return XS.apply(this, arguments);
+        return XS.call(this, body);
       };
     } catch (_) {}
     try {
@@ -214,7 +346,13 @@
             ? input
             : (input && input.url) || String(input);
         var k = kindOf(url);
-        return _f.call(this, input, init).then(function (res) {
+        var nextInit = init;
+        if (k === "userprops" && init && init.body != null) {
+          nextInit = Object.assign({}, init, {
+            body: maybeCoerceBody(init.body),
+          });
+        }
+        return _f.call(this, input, nextInit).then(function (res) {
           if (!k) return res;
           return res
             .clone()
@@ -222,6 +360,7 @@
             .then(function (data) {
               return new Response(JSON.stringify(patch(k, data)), {
                 status: res.status,
+                statusText: res.statusText,
                 headers: { "content-type": "application/json" },
               });
             })
@@ -232,7 +371,6 @@
       };
     } catch (_) {}
   })();
-
   try {
     [
       "plane.product_tour.completed",

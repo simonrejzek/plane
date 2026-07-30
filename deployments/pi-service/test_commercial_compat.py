@@ -197,6 +197,7 @@ def test_grants_data_loaded():
 def test_clean_and_normalize_issue_helpers():
     from commercial_compat import (
         clean_ce_issue_params,
+        coerce_display_filters_group_by,
         normalize_issues_list_response,
         sanitize_issue_filters,
         total_count_from_issues_body,
@@ -238,6 +239,19 @@ def test_clean_and_normalize_issue_helpers():
     assert json.loads(q3["filters"]) == {"priority": ["urgent"]}
     assert q3["group_by"] == "priority"
 
+    # Commercial type/parent_type must map to state_id (not drop group_by)
+    for bad in ("type", "type_id", "parent_type", "parent_id"):
+        qb = clean_ce_issue_params({"group_by": bad, "layout": "kanban"})
+        assert qb["group_by"] == "state_id", bad
+
+    prefs = {
+        "display_filters": {"group_by": "type", "sub_group_by": "parent_type", "layout": "list"},
+        "filters": {},
+    }
+    coerce_display_filters_group_by(prefs)
+    assert prefs["display_filters"]["group_by"] == "state"
+    assert prefs["display_filters"]["sub_group_by"] is None
+
     body = {
         "results": {
             "s1": {"results": [{"id": "i1", "state_id": "s1"}], "total_results": 2},
@@ -251,6 +265,13 @@ def test_clean_and_normalize_issue_helpers():
     assert tc["total_count"] == 2
     assert tc["counts"]["s1"] == 2
 
+    # Flat list can be wrapped as All Issues for SPA group-aware processIssueResponse
+    flat = normalize_issues_list_response(
+        [{"id": "a", "name": "A"}], force_flat_as_all_issues=True
+    )
+    assert "All Issues" in flat["results"]
+    assert flat["results"]["All Issues"]["results"][0]["id"] == "a"
+    assert flat["total_count"] == 1
 
 def test_project_issues_list_normalizes_grouped_response():
     app = make_app()

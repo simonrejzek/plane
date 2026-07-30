@@ -280,6 +280,11 @@ def as_page(items: Any, total: Optional[int] = None) -> Dict[str, Any]:
 
 # Commercial SPA display group_by keys → CE ISSUE_GROUP_BY_ALLOWLIST field names.
 # (EIssueGroupByToServerOptions in @plane/constants)
+#
+# type / parent_type are commercial-only. CE has no type_id grouping and
+# parent_type columns are hard-coded void 0 in the cloud SPA bundle — both
+# blank the board (getGroupByColumns → undefined → if (!groups) return null)
+# while total-count still shows e.g. "Work items 21". Map them to state_id.
 GROUP_BY_CLIENT_TO_CE: Dict[str, str] = {
     "state": "state_id",
     "priority": "priority",
@@ -292,6 +297,11 @@ GROUP_BY_CLIENT_TO_CE: Dict[str, str] = {
     "project": "project_id",
     "team_project": "project_id",
     "created_by": "created_by",
+    # commercial-only → safe CE default (state columns always load)
+    "type": "state_id",
+    "type_id": "state_id",
+    "parent_type": "state_id",
+    "parent_id": "state_id",
     # already-server forms (pass-through)
     "state_id": "state_id",
     "labels__id": "labels__id",
@@ -302,6 +312,38 @@ GROUP_BY_CLIENT_TO_CE: Dict[str, str] = {
     "project_id": "project_id",
 }
 
+# Display-filter keys the SPA must not keep for CE boards.
+_UNSUPPORTED_DISPLAY_GROUP_BY = frozenset(
+    {"type", "parent_type", "type_id", "parent_id"}
+)
+
+
+def coerce_display_filters_group_by(payload: Any) -> Any:
+    """Replace commercial-only group_by values with ``state`` in place.
+
+    Used for user-properties-style JSON (and any nested display_filters).
+    Returns the same object for chaining.
+    """
+    if not isinstance(payload, dict):
+        if isinstance(payload, list):
+            for item in payload:
+                coerce_display_filters_group_by(item)
+        return payload
+
+    df = payload.get("display_filters")
+    if isinstance(df, dict):
+        gb = df.get("group_by")
+        if gb is not None and str(gb) in _UNSUPPORTED_DISPLAY_GROUP_BY:
+            df["group_by"] = "state"
+        sgb = df.get("sub_group_by")
+        if sgb is not None and str(sgb) in _UNSUPPORTED_DISPLAY_GROUP_BY:
+            df["sub_group_by"] = None
+
+    # Nested containers (filters envelope, arrays of view prefs, etc.)
+    for v in payload.values():
+        if isinstance(v, (dict, list)):
+            coerce_display_filters_group_by(v)
+    return payload
 # Params commercial SPA always attaches that CE either ignores or mishandles.
 _COMMERCIAL_ONLY_ISSUE_PARAMS = frozenset(
     {
@@ -363,7 +405,12 @@ def sanitize_issue_filters(raw: Any) -> Optional[str]:
 
 
 def clean_ce_issue_params(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Strip commercial-only query keys and map group_by/sub_group_by for CE."""
+    """Strip commercial-only query keys and map group_by/sub_group_by for CE.
+
+    Unsupported commercial group keys (type/parent_type) are mapped to
+    state_id so CE returns state-grouped buckets instead of dropping group_by
+    and returning a flat list that the SPA cannot render under type columns.
+    """
     if not raw:
         return {}
     out: Dict[str, Any] = {}
@@ -381,12 +428,8 @@ def clean_ce_issue_params(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             continue
         out[k] = v
 
-    for key in ("group_by", "sub_group_by"):
-        if key not in out:
-            continue
-        mapped = GROUP_BY_CLIENT_TO_CE.get(str(out[key]), str(out[key]))
-        # CE allowlist rejection → drop invalid values rather than 400 the board
-        if mapped in GROUP_BY_CLIENT_TO_CE.values() or mapped in (
+    _CE_GROUP_ALLOWLIST = frozenset(
+        {
             "state_id",
             "state__group",
             "priority",
@@ -398,12 +441,23 @@ def clean_ce_issue_params(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             "created_by",
             "target_date",
             "start_date",
-        ):
+        }
+    ) | frozenset(GROUP_BY_CLIENT_TO_CE.values())
+
+    for key in ("group_by", "sub_group_by"):
+        if key not in out:
+            continue
+        raw_val = str(out[key])
+        mapped = GROUP_BY_CLIENT_TO_CE.get(raw_val, raw_val)
+        # CE allowlist rejection → fall back to state_id for group_by so the
+        # board still paints; drop only unknown sub_group_by.
+        if mapped in _CE_GROUP_ALLOWLIST:
             out[key] = mapped
+        elif key == "group_by":
+            out[key] = "state_id"
         else:
             out.pop(key, None)
     return out
-
 
 def _normalize_issue_item(issue: Dict[str, Any]) -> Dict[str, Any]:
     """Ensure commercial board fields exist with CE-compatible aliases."""
@@ -469,10 +523,42 @@ def _normalize_group_bucket(bucket: Any) -> Dict[str, Any]:
     return {"results": [], "total_results": int(bucket.get("total_results") or 0)}
 
 
-def normalize_issues_list_response(body: Any) -> Dict[str, Any]:
-    """Shape CE issues list for commercial processIssueResponse + referenced_resources."""
+def normalize_issues_list_response(
+    body: Any,
+    *,
+    force_flat_as_all_issues: bool = False,
+) -> Dict[str, Any]:
+    """Shape CE issues list for commercial processIssueResponse + referenced_resources.
+
+    When CE drops unsupported group_by it returns a flat ``results: Issue[]``.
+    The commercial SPA list/kanban path still expects either a grouped dict or
+    a single ``All Issues`` bucket when group_by is null. Optionally wrap flat
+    lists as ``{"All Issues": ...}`` so processIssueResponse can paint rows.
+    """
     if isinstance(body, list):
         items = [_normalize_issue_item(x) if isinstance(x, dict) else x for x in body]
+        if force_flat_as_all_issues:
+            return {
+                "results": {
+                    "All Issues": {
+                        "results": items,
+                        "total_results": len(items),
+                    }
+                },
+                "total_count": len(items),
+                "total_results": len(items),
+                "count": len(items),
+                "next_cursor": None,
+                "prev_cursor": None,
+                "next_page_results": False,
+                "prev_page_results": False,
+                "grouped_by": None,
+                "sub_grouped_by": None,
+                "extra_stats": None,
+                "referenced_resources": {},
+                "total_groups": 1,
+                "next_group_offset": None,
+            }
         return {
             "results": items,
             "total_count": len(items),
@@ -510,7 +596,18 @@ def normalize_issues_list_response(body: Any) -> Dict[str, Any]:
     results = out.get("results")
 
     if isinstance(results, list):
-        out["results"] = [_normalize_issue_item(x) if isinstance(x, dict) else x for x in results]
+        items = [_normalize_issue_item(x) if isinstance(x, dict) else x for x in results]
+        if force_flat_as_all_issues:
+            out["results"] = {
+                "All Issues": {
+                    "results": items,
+                    "total_results": len(items),
+                }
+            }
+            if out.get("total_groups") is None:
+                out["total_groups"] = 1
+        else:
+            out["results"] = items
     elif isinstance(results, dict):
         norm: Dict[str, Any] = {}
         for gid, bucket in results.items():
@@ -544,7 +641,6 @@ def normalize_issues_list_response(body: Any) -> Dict[str, Any]:
         out["sub_next_group_offset"] = None
 
     return out
-
 
 def total_count_from_issues_body(body: Any) -> Dict[str, Any]:
     """Build commercial getWorkItemTotalCount payload from a CE issues list body."""

@@ -21,9 +21,14 @@ def test_inject_source_forces_dual_sidebars() -> None:
     assert "JSON.stringify(250)" in text
     assert "location.reload" not in text
     assert "importmap" not in text
-    assert "__cosmicInjectVersion = 34" in text
+    assert "__cosmicInjectVersion = 35" in text
     assert "cosmic-force-projects-sidebar" in text
     assert "main-sidebar" in text
+    # Board blank fix: commercial type/parent_type group_by must be coerced
+    assert "parent_type" in text
+    assert "issue_local_filters" in text
+    assert "user-properties" in text or "userprops" in text
+    assert 'df.group_by = "state"' in text
 
 
 def test_index_early_prefs_and_inject_version() -> None:
@@ -31,9 +36,8 @@ def test_index_early_prefs_and_inject_version() -> None:
     assert "cosmic-dual-sidebar-prefs" in html
     assert 'app_sidebar_collapsed", "false"' in html
     assert "sidebarWidth" in html
-    assert re.search(r"inject\.js\?v=34", html)
+    assert re.search(r"inject\.js\?v=35", html)
     assert html.find("cosmic-dual-sidebar-prefs") < html.find("entry.client")
-
 
 def test_execute_inject_sets_localstorage_keys() -> None:
     """Execute the real inject.js under Node with a localStorage shim."""
@@ -121,16 +125,36 @@ def test_execute_inject_sets_localstorage_keys() -> None:
         global.clearInterval = () => {};
         global.setTimeout = () => 0;
         global.console = { warn() {}, log() {}, error() {} };
+        // Pre-poison: commercial type grouping blanks CosmicBoosts board
+        store.issue_local_filters = JSON.stringify([{
+          key: 'project',
+          workspaceSlug: 'cosmicboosts',
+          viewId: 'proj1',
+          userId: 'u1',
+          filters: { display_filters: { group_by: 'type', layout: 'list' } },
+        }]);
         const code = fs.readFileSync(process.argv[1], 'utf8');
         eval(code);
         // setItem(true) must be forced back to false
         ls.setItem('app_sidebar_collapsed', 'true');
+        // SPA write of parent_type must be coerced
+        ls.setItem('issue_local_filters', JSON.stringify([{
+          filters: { display_filters: { group_by: 'parent_type', sub_group_by: 'type' } },
+        }]));
+        let parsedFilters = null;
+        try { parsedFilters = JSON.parse(ls.getItem('issue_local_filters')); } catch (e) {}
         const out = {
           collapsed: ls.getItem('app_sidebar_collapsed'),
           width: ls.getItem('sidebarWidth'),
           hasRailKey: Object.keys(store).some((k) => k.startsWith('APP_RAIL_')),
           version: global.window.__cosmicInjectVersion,
           forceCss: !!global.document.getElementById('cosmic-force-projects-sidebar'),
+          groupBy: parsedFilters && parsedFilters[0] && parsedFilters[0].filters
+            && parsedFilters[0].filters.display_filters
+            && parsedFilters[0].filters.display_filters.group_by,
+          subGroupBy: parsedFilters && parsedFilters[0] && parsedFilters[0].filters
+            && parsedFilters[0].filters.display_filters
+            && parsedFilters[0].filters.display_filters.sub_group_by,
         };
         process.stdout.write(JSON.stringify(out));
         """
@@ -146,9 +170,10 @@ def test_execute_inject_sets_localstorage_keys() -> None:
     assert out["collapsed"] == "false", out
     assert json.loads(out["width"]) == 250, out
     assert out["hasRailKey"] is False, out
-    assert out["version"] == 34, out
+    assert out["version"] == 35, out
     assert out["forceCss"] is True, out
-
+    assert out["groupBy"] == "state", out
+    assert out["subGroupBy"] is None, out
 
 if __name__ == "__main__":
     test_inject_source_forces_dual_sidebars()
