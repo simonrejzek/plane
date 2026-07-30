@@ -481,6 +481,72 @@ def ensure_lazy_module_fallback() -> None:
         )
 
 
+def ensure_issues_layout_hoc_path_and_loader() -> None:
+    """Unblock issue-layout-HOC on /issues/ (modules already OK).
+
+    HOC does ``return workspaceSlug ? … : null``. Leaf-only useParams often
+    omits workspaceSlug on project Work items, so the main pane is null while
+    Display/Add chrome from the parent still renders. Also
+    ``!groupedIssueIds`` kept the skeleton forever when fetch never armed.
+    """
+    n = 0
+    old_ws = (
+        "let{layout:t,pendingInitialFetch:n}=e,{workspaceSlug:i}=r(),a=ue(),{issues:o}=_(a);return i?"
+    )
+    new_ws = (
+        "let{layout:t,pendingInitialFetch:n}=e,{workspaceSlug:i}=r();"
+        "if(!i){try{let m=(typeof location<`u`&&location.pathname||``).match(/^\\/([^/]+)\\//);"
+        "if(m)i=m[1]}catch(x){}}let a=ue(),{issues:o}=_(a);return i?"
+    )
+    old_load = "o?.getIssueLoader()===`init-loader`||!o?.groupedIssueIds?(0,Q.jsx)(z,{layout:t})"
+    new_load = "o?.getIssueLoader()===`init-loader`?(0,Q.jsx)(z,{layout:t})"
+    for path in ROOT.rglob("issue-layout-HOC-*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        original = raw
+        if old_ws in raw:
+            raw = raw.replace(old_ws, new_ws, 1)
+        if old_load in raw:
+            raw = raw.replace(old_load, new_load, 1)
+        if raw != original:
+            path.write_text(raw, encoding="utf-8")
+            n += 1
+            print(f"issue-layout-HOC: {path.name}")
+        else:
+            print(f"issue-layout-HOC already/missing: {path.name}")
+    # Extra useEffect arm on base-list so fetch re-runs when O/k appear
+    old_arm = (
+        "z=Mt(()=>{l!==o.INITIATIVE_WORK_ITEM&&(E===s.LIST||!E)&&p(`init-loader`,"
+        "{canGroup:!0,perPageCount:T?10:30,groupPaginationEnabled:!0,groupPerPageCount:10,groupOffset:0},n)},"
+        "[l,p,D,E,n]),B=f?.groupedIssueIds"
+    )
+    new_arm = (
+        "z=Mt(()=>{l!==o.INITIATIVE_WORK_ITEM&&(E===s.LIST||!E)&&p(`init-loader`,"
+        "{canGroup:!0,perPageCount:T?10:30,groupPaginationEnabled:!0,groupPerPageCount:10,groupOffset:0},n)},"
+        "[l,p,D,E,n]),_cosmicArm=(0,Tn.useEffect)(()=>{if(l===o.INITIATIVE_WORK_ITEM)return;"
+        "if(!(E===s.LIST||!E))return;try{p(`init-loader`,{canGroup:!0,perPageCount:T?10:30,"
+        "groupPaginationEnabled:!0,groupPerPageCount:10,groupOffset:0},n)}catch(x){}},[l,p,D,E,n,O,k]),"
+        "B=f?.groupedIssueIds"
+    )
+    for path in ROOT.rglob("base-list-root-*.js"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "_cosmicArm" in raw:
+            print(f"base-list arm already: {path.name}")
+            continue
+        if old_arm in raw:
+            path.write_text(raw.replace(old_arm, new_arm, 1), encoding="utf-8")
+            n += 1
+            print(f"base-list arm: {path.name}")
+        else:
+            print(f"WARN: base-list arm needle missing in {path.name}")
+    print(f"layout HOC/list arm files: {n}")
+
+
 def ensure_issues_init_fetch_retries() -> None:
     """Re-arm ListLayout init fetch; modules already fetch reliably.
 
@@ -821,6 +887,7 @@ def main() -> int:
     ensure_project_issues_board_mount()
     ensure_use_params_merge_matches()
     ensure_issues_init_fetch_retries()
+    ensure_issues_layout_hoc_path_and_loader()
     fix_css_modulepreloads()
     namespace_release_assets()
     # re-apply after namespace so release copies also get board + css fixes
@@ -829,6 +896,7 @@ def main() -> int:
     ensure_project_issues_board_mount()
     ensure_use_params_merge_matches()
     ensure_issues_init_fetch_retries()
+    ensure_issues_layout_hoc_path_and_loader()
     fix_css_modulepreloads()
     return 0
 
