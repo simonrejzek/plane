@@ -2447,7 +2447,12 @@ async def transcribe_audio(request: Request):
             )
         body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {"text": r.text}
         text = body.get("text") if isinstance(body, dict) else str(body)
-        return {"text": text or "", "transcript": text or "", "result": text or ""}
+        return {
+            "detail": text or "",
+            "text": text or "",
+            "transcript": text or "",
+            "result": text or "",
+        }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=502)
 

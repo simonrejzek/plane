@@ -45,6 +45,7 @@ def test_transcription_uses_whisper_large_v3_turbo(monkeypatch):
         )
 
     assert response.status_code == 200
+    assert response.json()["detail"] == "hello from audio"
     assert response.json()["text"] == "hello from audio"
     assert FakeAsyncClient.request_data == {
         "model": "openai/whisper-large-v3-turbo"
