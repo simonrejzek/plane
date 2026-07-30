@@ -1711,14 +1711,15 @@ def flags(workspace_slug: Optional[str] = None):
             "AI_PAGES_EDIT": True,
             "AI_AUTOPILOT": True,
             "AI_SKILLS": True,
-            # Mobile product surface — Pilot AI + app rail + pages
+            # Mobile product surface — Pilot AI + pages. Keep APP_RAIL disabled
+            # on web so Plane renders the full Projects sidebar.
             "PI_CHAT": True,
             "PI_CHAT_MOBILE": True,
             "PI_DEDUPE": True,
             "PI_DEDUPE_MOBILE": True,
             "PI_CONVERSE": True,
             "PI_ACTIONS": True,
-            "APP_RAIL": True,
+            "APP_RAIL": False,
             "WORKSPACE_PAGES": True,
             "NESTED_PAGES": True,
             "PAGE_PUBLISH": True,

@@ -46,7 +46,8 @@
         if (kind === "flags") {
           if (!data.values) data.values = {};
           data.values.AI_CHAT = true;
-          data.values.APP_RAIL = true;
+          // The cloud-style full Projects sidebar is the non-App-Rail shell.
+          data.values.APP_RAIL = false;
           data.values.WORKSPACE_PAGES = true;
           data.values.PI_CHAT = true;
         }

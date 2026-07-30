@@ -159,8 +159,8 @@ def test_flags_all_enabled():
     assert r.status_code == 200
     values = r.json()["values"]
     assert values.get("AI_CHAT") is True
-    assert values.get("APP_RAIL") is True
-    assert all(v is True for v in values.values())
+    assert values.get("APP_RAIL") is False
+    assert all(v is True for key, v in values.items() if key != "APP_RAIL")
 
 
 def test_workspace_preferences_hide_dismissed_cards_and_persist(tmp_path, monkeypatch):

@@ -759,7 +759,9 @@ def register_commercial_compat(app: FastAPI) -> None:
             values[k] = True
         values.update(
             {
-                "APP_RAIL": True,
+                # False selects Plane's full Projects sidebar. True selects the
+                # narrow icon rail used by the alternate 3.x shell.
+                "APP_RAIL": False,
                 "AI_CHAT": True,
                 "AI_CONVERSE": True,
                 "AI_AUTOPILOT": True,
@@ -1377,7 +1379,7 @@ def register_commercial_compat(app: FastAPI) -> None:
             values[k] = True
         values.update(
             {
-                "APP_RAIL": True,
+                "APP_RAIL": False,
                 "AI_CHAT": True,
                 "AI_CONVERSE": True,
                 "AI_AUTOPILOT": True,
@@ -2493,6 +2495,7 @@ def register_commercial_compat(app: FastAPI) -> None:
             values = dict((BUSINESS_FLAGS or {}).get("values") or {})
             for k in list(values.keys()):
                 values[k] = True
+            values["APP_RAIL"] = False
             return {"values": values}
         if request.method == "GET":
             return {}
