@@ -273,6 +273,27 @@ def test_clean_and_normalize_issue_helpers():
     assert flat["results"]["All Issues"]["results"][0]["id"] == "a"
     assert flat["total_count"] == 1
 
+def test_workspace_preferences_dismiss_epic_migration():
+    """EpicMigrationModal opens unless explored_features.epic_migration is true."""
+    app = make_app()
+
+    async def mock_ce(path, request, params=None):
+        if "workspace-members/me" in path:
+            return 200, {"id": "m1", "role": 20, "is_active": True}, {}
+        if path == "/api/users/me/":
+            return 200, {"id": "u1"}, {}
+        if path == "/api/users/me/workspaces/":
+            return 200, [{"id": "w1", "slug": "cosmicboosts", "role": 20}], {}
+        return 404, {"error": "not mocked"}, {}
+
+    with patch("commercial_compat.ce_get", new=AsyncMock(side_effect=mock_ce)):
+        c = TestClient(app)
+        r = c.get("/api/workspaces/cosmicboosts/preferences/")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body.get("explored_features", {}).get("epic_migration") is True
+
+
 def test_project_issues_list_normalizes_grouped_response():
     app = make_app()
 

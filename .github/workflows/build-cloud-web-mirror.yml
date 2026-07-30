@@ -48,8 +48,8 @@ jobs:
           file: deployments/cloud-web-mirror/Dockerfile
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v29
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v28
-            ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v27
             ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-${{ github.sha }}
             ghcr.io/${{ github.repository_owner }}/plane-web:preview-mirror
 
@@ -82,7 +82,7 @@ jobs:
           # AI grey-screen surgical patches present
           grep -q "s=!0,c=!0" public/assets/detail-DFXDSk4X.js
           grep -q 'e._result?.default||(()=>null)' public/assets/chunk-IJF3QNGC-D_ocRA8b.js
-          grep -q "inject.js?v=35" public/index.html
+          grep -q "inject.js?v=36" public/index.html
           node --check public/assets/sidebar-wrapper-v7tips.js
           # Sidebar bare keys must not be minified 2-letter junk
           grep -q '"drafts":"Drafts"' public/assets/en-i18n-fallbacks-v7.js
@@ -97,8 +97,8 @@ jobs:
         run: |
           set -e
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v28
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v28 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v28
-          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v28 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v27
+          docker pull ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v29
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v29 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v29
+          docker tag ghcr.io/${{ github.repository_owner }}/plane-web:cloud-mirror-v29 ttl.sh/cosmicboosts-plane-web:cloud-mirror-v28
+          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v29
           docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v28
-          docker push ttl.sh/cosmicboosts-plane-web:cloud-mirror-v27

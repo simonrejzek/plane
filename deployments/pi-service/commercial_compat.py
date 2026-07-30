@@ -1554,6 +1554,11 @@ def register_commercial_compat(app: FastAPI) -> None:
             "has_dismissed_wiki_tour": True,
             "has_dismissed_project_tour": True,
             "has_dismissed_work_item_tour": True,
+            # EpicMigrationModal: if explored_features.epic_migration !== true it opens
+            # a blocking walkthrough (and can leave raw "Step {current} of {total}" if ICU fails).
+            "explored_features": {
+                "epic_migration": True,
+            },
             "dismissed_tours": [
                 "product",
                 "sidebar",
@@ -1564,6 +1569,7 @@ def register_commercial_compat(app: FastAPI) -> None:
                 "home",
                 "app_rail",
                 "my_work",
+                "epic_migration",
             ],
             "product_tours": {
                 "dismissed": True,
@@ -1585,6 +1591,14 @@ def register_commercial_compat(app: FastAPI) -> None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         cur = dict(_default_preferences())
         cur.update(PREF_STORE.get(slug, {}) or {})
+        # Never re-open the blocking Epics migration walkthrough once dismissed.
+        explored = cur.get("explored_features")
+        if not isinstance(explored, dict):
+            explored = {}
+        else:
+            explored = dict(explored)
+        explored["epic_migration"] = True
+        cur["explored_features"] = explored
         return cur
 
     @app.api_route("/api/workspaces/{slug}/preferences/", methods=["PATCH", "PUT", "POST"])
@@ -1607,9 +1621,16 @@ def register_commercial_compat(app: FastAPI) -> None:
                     cur[k] = nested
                 else:
                     cur[k] = v
+        # Keep epic migration explored after any write (including partial patches).
+        explored = cur.get("explored_features")
+        if not isinstance(explored, dict):
+            explored = {}
+        else:
+            explored = dict(explored)
+        explored["epic_migration"] = True
+        cur["explored_features"] = explored
         PREF_STORE[slug] = cur
         return cur
-
     @app.get("/api/workspaces/{slug}/workflows/")
     async def workflows(slug: str, request: Request):
         err_status, role, err_body = await resolve_membership(slug, request)

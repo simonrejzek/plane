@@ -1,5 +1,5 @@
 /**
- * Cosmic inject v35 — dual sidebars + board group_by coerce.
+ * Cosmic inject v36 — dual sidebars + board group_by coerce + epic tour dismiss.
  * No service workers. No reloads. No import maps. No module remaps.
  *
  * Keeps APP_RAIL on (icon rail) and forces the Projects panel expanded.
@@ -9,17 +9,19 @@
  * `app_sidebar_collapsed`. After that, rewriting localStorage alone does
  * nothing — ResizableSidebar keeps `#main-sidebar` at width 0. We therefore
  * (1) keep the storage key false, (2) block setItem(true), (3) force the
- * real #main-sidebar open via CSS + optional toggle click.
+ * real #main-sidebar open via CSS + optional toggle click (after hydrate).
  *
  * Board blank with "Work items N": commercial SPA group_by type/parent_type
  * needs work-item-types (CE empty) / parent_type always void 0 →
  * getGroupByColumns returns undefined → if (!groups) return null.
  * Coerce those display filters to "state" in localStorage + user-properties.
+ *
+ * Epics walkthrough: preferences must include explored_features.epic_migration.
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 35;
+  window.__cosmicInjectVersion = 36;
 
   // Kill any SW left from broken experiments
   try {
@@ -239,12 +241,24 @@
     } catch (_) {}
   }
 
-  // Run immediately (may still lose to deferred order; early index script also runs)
+  // localStorage early (before SPA MobX hydrate). DOM/CSS force waits so we
+  // don't fight React hydration (minified error #418 text mismatches).
   expandDualSidebars();
-  injectForceOpenCss();
+  function afterHydrateShell() {
+    injectForceOpenCss();
+    forceMainSidebarDom();
+  }
+  if (document.readyState === "complete") {
+    setTimeout(afterHydrateShell, 0);
+  } else {
+    window.addEventListener("load", function () {
+      setTimeout(afterHydrateShell, 0);
+    });
+  }
 
   // Soft-force critical flags (APP_RAIL must stay true for icon rail)
-  // + coerce type/parent_type group_by on user-properties responses.
+  // + coerce type/parent_type group_by on user-properties responses
+  // + dismiss Epics migration walkthrough via preferences.explored_features.
   (function forceFlags() {
     function kindOf(url) {
       if (!url) return null;
@@ -255,7 +269,16 @@
       if (/\/api\/payments\/workspaces\/[^/]+\/flags/.test(u)) return "flags";
       // Project/cycle/module/workspace user-properties hold display_filters.group_by
       if (u.indexOf("/user-properties") !== -1) return "userprops";
+      if (/\/api\/workspaces\/[^/]+\/preferences\/?(\?|$)/.test(u)) return "prefs";
       return null;
+    }
+    function ensureEpicExplored(data) {
+      if (!data || typeof data !== "object") return data;
+      if (!data.explored_features || typeof data.explored_features !== "object") {
+        data.explored_features = {};
+      }
+      data.explored_features.epic_migration = true;
+      return data;
     }
     function patch(kind, data) {
       try {
@@ -278,6 +301,9 @@
         }
         if (kind === "userprops") {
           coerceGroupByDeep(data);
+        }
+        if (kind === "prefs") {
+          ensureEpicExplored(data);
         }
       } catch (_) {}
       return data;
@@ -386,11 +412,14 @@
   } catch (_) {}
 
   // Re-apply after SPA theme hydrate. No full-page reloads.
+  // Start after first paint so React can hydrate without our forced width.
   var ticks = 0;
   var timer = setInterval(function () {
     expandDualSidebars();
-    injectForceOpenCss();
-    forceMainSidebarDom();
+    if (document.readyState === "complete" || ticks > 2) {
+      injectForceOpenCss();
+      forceMainSidebarDom();
+    }
     ticks += 1;
     if (ticks >= 40) clearInterval(timer); // ~10s
   }, 250);

@@ -21,7 +21,7 @@ def test_inject_source_forces_dual_sidebars() -> None:
     assert "JSON.stringify(250)" in text
     assert "location.reload" not in text
     assert "importmap" not in text
-    assert "__cosmicInjectVersion = 35" in text
+    assert "__cosmicInjectVersion = 36" in text
     assert "cosmic-force-projects-sidebar" in text
     assert "main-sidebar" in text
     # Board blank fix: commercial type/parent_type group_by must be coerced
@@ -36,7 +36,7 @@ def test_index_early_prefs_and_inject_version() -> None:
     assert "cosmic-dual-sidebar-prefs" in html
     assert 'app_sidebar_collapsed", "false"' in html
     assert "sidebarWidth" in html
-    assert re.search(r"inject\.js\?v=35", html)
+    assert re.search(r"inject\.js\?v=36", html)
     assert html.find("cosmic-dual-sidebar-prefs") < html.find("entry.client")
 
 def test_execute_inject_sets_localstorage_keys() -> None:
@@ -89,6 +89,7 @@ def test_execute_inject_sets_localstorage_keys() -> None:
         const document = {
           head,
           documentElement,
+          readyState: "complete",
           getElementById(id) {
             return nodes[id] || null;
           },
@@ -102,6 +103,7 @@ def test_execute_inject_sets_localstorage_keys() -> None:
           addEventListener() {},
           querySelectorAll() { return []; },
         };
+        const timeouts = [];
         global.window = {
           localStorage: ls,
           sessionStorage: ls,
@@ -123,7 +125,8 @@ def test_execute_inject_sets_localstorage_keys() -> None:
         };
         global.setInterval = () => 0;
         global.clearInterval = () => {};
-        global.setTimeout = () => 0;
+        // inject defers CSS force via setTimeout after hydrate
+        global.setTimeout = (fn) => { timeouts.push(fn); return timeouts.length; };
         global.console = { warn() {}, log() {}, error() {} };
         // Pre-poison: commercial type grouping blanks CosmicBoosts board
         store.issue_local_filters = JSON.stringify([{
@@ -135,6 +138,11 @@ def test_execute_inject_sets_localstorage_keys() -> None:
         }]);
         const code = fs.readFileSync(process.argv[1], 'utf8');
         eval(code);
+        // flush deferred afterHydrateShell timeouts
+        while (timeouts.length) {
+          const fn = timeouts.shift();
+          try { if (typeof fn === 'function') fn(); } catch (e) {}
+        }
         // setItem(true) must be forced back to false
         ls.setItem('app_sidebar_collapsed', 'true');
         // SPA write of parent_type must be coerced
@@ -170,7 +178,7 @@ def test_execute_inject_sets_localstorage_keys() -> None:
     assert out["collapsed"] == "false", out
     assert json.loads(out["width"]) == 250, out
     assert out["hasRailKey"] is False, out
-    assert out["version"] == 35, out
+    assert out["version"] == 36, out
     assert out["forceCss"] is True, out
     assert out["groupBy"] == "state", out
     assert out["subGroupBy"] is None, out
