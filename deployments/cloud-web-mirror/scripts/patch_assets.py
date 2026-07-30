@@ -119,7 +119,12 @@ def namespace_release_assets() -> None:
     prefix = f"/assets/releases/{RELEASE}/"
     changed = 0
     for path in PUBLIC.rglob("*"):
-        if not path.is_file() or RELEASE_ROOT in path.parents:
+        if not path.is_file():
+            continue
+        # Keep the source asset graph pristine for repeatable reruns. Rewrite
+        # public bootstrap documents and the copied release graph that browsers
+        # actually load.
+        if ROOT in path.parents and RELEASE_ROOT not in path.parents:
             continue
         if path.suffix not in {".js", ".css", ".html", ".json", ".map", ".svg"}:
             continue
@@ -144,6 +149,19 @@ def namespace_release_assets() -> None:
     marker = RELEASE_ROOT / "detail-DFXDSk4X.js"
     if not marker.exists():
         raise SystemExit(f"ERROR: release asset graph missing {marker}")
+    stale_refs = []
+    for path in RELEASE_ROOT.rglob("*"):
+        if not path.is_file() or path.suffix not in {".js", ".css", ".html", ".json", ".map", ".svg"}:
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+            if re.search(rf"/assets/(?!releases/{re.escape(RELEASE)}/)", raw):
+                stale_refs.append(path.relative_to(RELEASE_ROOT))
+        except Exception:
+            continue
+    if stale_refs:
+        sample = ", ".join(map(str, stale_refs[:5]))
+        raise SystemExit(f"ERROR: release graph retains unversioned /assets/ refs: {sample}")
     print(f"release namespace: {RELEASE} ({changed} documents rewritten)")
 
 
