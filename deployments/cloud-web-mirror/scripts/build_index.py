@@ -29,7 +29,7 @@ EARLY_SIDEBAR = """<script id="cosmic-dual-sidebar-prefs">
 
 INJECT = (
     '<script id="cosmic-shell-inject" '
-    'src="/cosmic-pilot/inject.js?v=41" defer></script>'
+    'src="/cosmic-pilot/inject.js?v=42" defer></script>'
 )
 
 
@@ -62,7 +62,7 @@ def main() -> None:
     assert "logo-spinner-light" in html and "logo-spinner-dark" in html
     assert "critical-theme" in html
     assert "cosmic-dual-sidebar-prefs" in html
-    assert "inject.js?v=41" in html
+    assert "inject.js?v=42" in html
     assert html.count("<script") == html.count("</script>")
     assert 'gif"dark"' not in html
     print("sanity ok")

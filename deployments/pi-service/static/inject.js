@@ -1,5 +1,5 @@
 /**
- * Cosmic inject v41 — dual sidebars, board group_by, epic tour, route fixes,
+ * Cosmic inject v42 — dual sidebars, board group_by, epic tour, route fixes,
  * CSS modulepreload fix, CosmicBoosts blank-board recovery.
  * No service workers. No reloads (except one-shot blank-board recovery).
  *
@@ -7,6 +7,7 @@
  * - group_by type/parent_type → no CE columns (if (!groups) return null)
  * - CE sparse groups: headers with total_results, results:[] → zero cards
  * - SPA uses axios/XHR for /issues/ — fetch-only intercept never fills cards
+ * - page gate !o blanked ListLayout before filters hydrated (web board-mount)
  * - skipBootstrap / ingest sidecar flags must be off on self-host (web patch)
  * - Early DOM mutation (sidebar force, splash) causes React #418 and blank pane
  * Coerce display filters to state; ensure layout=list; prefetch states-lite;
@@ -15,7 +16,7 @@
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 41;
+  window.__cosmicInjectVersion = 42;
 
   // Kill any SW left from broken experiments
   try {
@@ -669,55 +670,74 @@
     });
   } catch (_) {}
 
-  // One-shot recovery: count badge present, zero issue rows → fix filters + reload
+  // One-shot recovery: Work items board chrome visible, zero cards → seed filters + reload
   function blankBoardRecovery() {
     if (!isIssuesPath()) return;
     if (sessionStorage.getItem("cosmic_blank_board_reloaded") === "1") return;
     try {
       var text = (document.body && document.body.innerText) || "";
+      // Badge optional: "Work items 21" OR just board chrome (Display / Add work item)
+      var hasBoardChrome =
+        /Work items?/i.test(text) ||
+        (text.indexOf("Display") !== -1 && text.indexOf("Add work item") !== -1);
+      if (!hasBoardChrome) return;
       var countMatch = text.match(/Work items?\s+(\d+)/i);
-      var count = countMatch ? parseInt(countMatch[1], 10) : 0;
-      if (!(count > 0)) return;
-      // issue rows / kanban cards
+      var count = countMatch ? parseInt(countMatch[1], 10) : -1;
+      // issue rows / kanban cards / sequence ids
       var rows =
         document.querySelectorAll(
           '[id^="issue-"], a[href*="/issues/"][href*="-"], .group\\/kanban-block'
         ).length || 0;
-      // Also count list rows with sequence-like DEMO-1
       if (rows < 1 && /[A-Z]{2,5}-\d+/.test(text)) rows = 1;
       if (rows >= 1) return;
-      // pure empty main with badge — recover once
+      // If badge is explicitly 0, board is legitimately empty
+      if (count === 0) return;
       sessionStorage.setItem("cosmic_blank_board_reloaded", "1");
       coerceIssueLocalFiltersStorage();
       var slug = workspaceSlugFromPath();
       var pid = projectIdFromPath();
       ensureBoardGroupByState(slug, pid);
-      // Force local filters to state for this view
       try {
         var raw = localStorage.getItem("issue_local_filters");
-        if (raw) {
-          var arr = JSON.parse(raw);
-          if (Array.isArray(arr)) {
-            arr.forEach(function (entry) {
-              if (!entry || !entry.filters) return;
-              var df =
-                entry.filters.display_filters ||
-                entry.filters.displayFilters ||
-                {};
-              if (typeof df === "object") {
-                df.group_by = "state";
-                if (
-                  df.sub_group_by === "type" ||
-                  df.sub_group_by === "parent_type"
-                )
-                  df.sub_group_by = null;
-                if (entry.filters.display_filters) entry.filters.display_filters = df;
-                if (entry.filters.displayFilters) entry.filters.displayFilters = df;
-              }
-            });
-            localStorage.setItem("issue_local_filters", JSON.stringify(arr));
+        var arr = raw ? JSON.parse(raw) : [];
+        if (!Array.isArray(arr)) arr = [];
+        // ensure an entry for this project view with list+state
+        var found = false;
+        arr.forEach(function (entry) {
+          if (!entry || !entry.filters) return;
+          var df =
+            entry.filters.display_filters ||
+            entry.filters.displayFilters ||
+            {};
+          if (typeof df === "object") {
+            df.layout = "list";
+            df.group_by = "state";
+            if (
+              df.sub_group_by === "type" ||
+              df.sub_group_by === "parent_type"
+            )
+              df.sub_group_by = null;
+            if (entry.filters.display_filters) entry.filters.display_filters = df;
+            if (entry.filters.displayFilters) entry.filters.displayFilters = df;
+            found = true;
           }
+        });
+        if (!found && slug && pid) {
+          arr.push({
+            key: "project",
+            workspaceSlug: slug,
+            viewId: pid,
+            userId: localStorage.getItem("cosmic_user_id") || "self",
+            filters: {
+              display_filters: {
+                layout: "list",
+                group_by: "state",
+                order_by: "-created_at",
+              },
+            },
+          });
         }
+        localStorage.setItem("issue_local_filters", JSON.stringify(arr));
       } catch (_) {}
       setTimeout(function () {
         try {
@@ -728,6 +748,7 @@
   }
   setTimeout(blankBoardRecovery, 2500);
   setTimeout(blankBoardRecovery, 5000);
+  setTimeout(blankBoardRecovery, 8000);
   setTimeout(function () {
     try {
       sessionStorage.removeItem("cosmic_blank_board_reloaded");

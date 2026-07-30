@@ -21,7 +21,7 @@ def test_inject_source_forces_dual_sidebars() -> None:
     assert "JSON.stringify(250)" in text
     # one-shot blank-board recovery may call reload once; no importmap remaps
     assert "importmap" not in text
-    assert "__cosmicInjectVersion = 41" in text
+    assert "__cosmicInjectVersion = 42" in text
     assert "cosmicStateIdsByProject" in text or "__cosmicStateIdsByProject" in text
     assert "blankBoardRecovery" in text or "blank_board" in text
     assert "cosmic-force-projects-sidebar" in text
@@ -31,9 +31,9 @@ def test_inject_source_forces_dual_sidebars() -> None:
     assert "issue_local_filters" in text
     assert "user-properties" in text or "userprops" in text
     assert 'df.group_by = "state"' in text
-    # v41: axios/XHR sparse-group card fill (fetch-only missed cards)
+    # v41+: axios/XHR sparse-group card fill (fetch-only missed cards)
     assert "installIssuesXhrInterceptor" in text or "__cosmicIssuesXhrPatched" in text
-    assert "fillSparseIssuesBody" in text or "inject-v41" in text
+    assert "fillSparseIssuesBody" in text or "inject-v4" in text
 
 
 def test_index_early_prefs_and_inject_version() -> None:

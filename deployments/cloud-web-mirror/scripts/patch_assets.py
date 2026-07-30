@@ -457,6 +457,109 @@ def ensure_lazy_module_fallback() -> None:
         )
 
 
+def ensure_project_issues_board_mount() -> None:
+    """Mount project Work items even while filters hydrate; always fetch list.
+
+    Commercial page-CSL8Ir returns ``<Fragment/>`` when
+    ``getIssueFilters(projectId)`` is still null (``!n||!r||!o``). That blanks
+    the board body forever if fetchFilters is slow/fails once — headers stay
+    (parent layout) but ListLayout never mounts so fetchIssues never runs.
+
+    Also default ``displayFilters.layout`` to ``list`` so ListLayout's
+    ``E===LIST`` init fetch is not skipped when layout is momentarily unset.
+
+    Hardens PROJECT ``fetchFilters`` so a user-properties glitch still seeds
+    default display filters into the MobX store (layout=list, group_by=state).
+    """
+    nfiles = 0
+    # page-*: project work items route
+    page_needles = [
+        (
+            # gate: require workspace+project only (not hydrated filters)
+            "!n||!r||!o?(0,B.jsx)(B.Fragment,{})",
+            "!n||!r?(0,B.jsx)(B.Fragment,{})",
+        ),
+        (
+            "o=r?a?.getIssueFilters(r):void 0,s=o?.displayFilters?.layout",
+            'o=r?a?.getIssueFilters(r):void 0,s=o?.displayFilters?.layout??"list"',
+        ),
+        # alternate minifier order / binding letters seen in some chunks
+        (
+            "!n||!r||!o?(0,",
+            "!n||!r?(0,",
+        ),
+    ]
+    list_needles = [
+        (
+            "T=C?.group_by||null,E=C?.layout",
+            'T=C?.group_by||null,E=C?.layout??"list"',
+        ),
+        (
+            # init fetch: treat missing layout as list so first paint loads cards
+            "l!==o.INITIATIVE_WORK_ITEM&&E===s.LIST&&p(`init-loader`",
+            "l!==o.INITIATIVE_WORK_ITEM&&(E===s.LIST||!E)&&p(`init-loader`",
+        ),
+    ]
+    # PROJECT fetchFilters: wrap await user-properties so store still hydrates
+    filter_needles = [
+        (
+            "fetchFilters=async(e,t)=>{let n=await this.rootIssueStore.rootStore.memberViewState.fetchProjectUserProperties(e,t),r=this.computedDisplayFilters(n?.display_filters),i=this.computedDisplayProperties(n?.display_properties),a={group_by:[],sub_group_by:[]},o=this.rootIssueStore.currentUserId;if(o){let n=this.handleIssuesLocalFilters.get(m.PROJECT,e,t,o);a.group_by=n?.kanban_filters?.group_by||[],a.sub_group_by=n?.kanban_filters?.sub_group_by||[]}C(()=>{j(this.filters,[t],{richFilters:n?.rich_filters||{},pqlFilters:n?.pql_filters||qe,lastUsedFilterType:n?.last_used_filter,displayFilters:r,displayProperties:i,kanbanFilters:a})})",
+            "fetchFilters=async(e,t)=>{let n;try{n=await this.rootIssueStore.rootStore.memberViewState.fetchProjectUserProperties(e,t)}catch(err){n=null}if(!n||typeof n!==`object`)n={display_filters:{layout:`list`,group_by:`state`,order_by:`-created_at`},display_properties:{},rich_filters:{},pql_filters:qe};if(!n.display_filters||typeof n.display_filters!==`object`)n.display_filters={};if(!n.display_filters.layout)n.display_filters.layout=`list`;if(n.display_filters.group_by==null||n.display_filters.group_by===``)n.display_filters.group_by=`state`;let r=this.computedDisplayFilters(n?.display_filters),i=this.computedDisplayProperties(n?.display_properties),a={group_by:[],sub_group_by:[]},o=this.rootIssueStore.currentUserId;if(o){let n=this.handleIssuesLocalFilters.get(m.PROJECT,e,t,o);a.group_by=n?.kanban_filters?.group_by||[],a.sub_group_by=n?.kanban_filters?.sub_group_by||[]}C(()=>{j(this.filters,[t],{richFilters:n?.rich_filters||{},pqlFilters:n?.pql_filters||qe,lastUsedFilterType:n?.last_used_filter,displayFilters:r,displayProperties:i,kanbanFilters:a})})}",
+        ),
+    ]
+    targets = (
+        list(ROOT.glob("page-*.js"))
+        + list(ROOT.glob("base-list-root-*.js"))
+        + list(ROOT.glob("store-context*.js"))
+        + list((ROOT / "releases").glob("**/page-*.js") if (ROOT / "releases").exists() else [])
+        + list(
+            (ROOT / "releases").glob("**/base-list-root-*.js")
+            if (ROOT / "releases").exists()
+            else []
+        )
+        + list(
+            (ROOT / "releases").glob("**/store-context*.js")
+            if (ROOT / "releases").exists()
+            else []
+        )
+    )
+    seen = set()
+    for path in targets:
+        try:
+            rp = path.resolve()
+        except Exception:
+            rp = path
+        if rp in seen:
+            continue
+        seen.add(rp)
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        original = raw
+        if path.name.startswith("page-"):
+            if "PROJECT_ISSUES_" not in raw:
+                continue
+            needles = page_needles
+        elif path.name.startswith("base-list-root"):
+            needles = list_needles
+        elif path.name.startswith("store-context"):
+            needles = filter_needles
+        else:
+            continue
+        for old, new in needles:
+            if old in raw and new not in raw:
+                raw = raw.replace(old, new)
+        if raw != original:
+            path.write_text(raw, encoding="utf-8")
+            nfiles += 1
+            print(f"board-mount patched: {path.name}")
+        elif path.name.startswith("page-") and "PROJECT_ISSUES_" in original:
+            if "!n||!r?(0,B.jsx)(B.Fragment,{})" in original or 'layout??"list"' in original:
+                print(f"board-mount already: {path.name}")
+    print(f"board-mount patch files: {nfiles}")
+
+
 def main() -> int:
     if not ROOT.is_dir():
         print(f"missing assets dir: {ROOT}", file=sys.stderr)
@@ -487,11 +590,13 @@ def main() -> int:
     ensure_epic_migration_fallbacks()
     enable_selfhost_issue_bootstrap()
     ensure_board_groups_fallback()
+    ensure_project_issues_board_mount()
     fix_css_modulepreloads()
     namespace_release_assets()
     # re-apply after namespace so release copies also get board + css fixes
     enable_selfhost_issue_bootstrap()
     ensure_board_groups_fallback()
+    ensure_project_issues_board_mount()
     fix_css_modulepreloads()
     return 0
 
