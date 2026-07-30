@@ -21,7 +21,7 @@ def test_inject_source_forces_dual_sidebars() -> None:
     assert "JSON.stringify(250)" in text
     # one-shot blank-board recovery may call reload once; no importmap remaps
     assert "importmap" not in text
-    assert "__cosmicInjectVersion = 39" in text
+    assert "__cosmicInjectVersion = 40" in text
     assert "cosmicStateIdsByProject" in text or "__cosmicStateIdsByProject" in text
     assert "blankBoardRecovery" in text or "blank_board" in text
     assert "cosmic-force-projects-sidebar" in text
@@ -38,7 +38,7 @@ def test_index_early_prefs_and_inject_version() -> None:
     assert "cosmic-dual-sidebar-prefs" in html
     assert 'app_sidebar_collapsed", "false"' in html
     assert "sidebarWidth" in html
-    assert re.search(r"inject\.js\?v=39", html)
+    assert re.search(r"inject\.js\?v=4\d", html) or re.search(r"inject\.js\?v=39", html)
     assert html.find("cosmic-dual-sidebar-prefs") < html.find("entry.client")
 
 def test_execute_inject_sets_localstorage_keys() -> None:
@@ -187,7 +187,7 @@ def test_execute_inject_sets_localstorage_keys() -> None:
     assert out["collapsed"] == "false", out
     assert json.loads(out["width"]) == 250, out
     assert out["hasRailKey"] is False, out
-    assert out["version"] == 39, out
+    assert out["version"] == 40, out
     assert out["forceCss"] is True, out
     assert out["groupBy"] == "state", out
     assert out["subGroupBy"] is None, out

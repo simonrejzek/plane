@@ -1,5 +1,5 @@
 /**
- * Cosmic inject v39 — dual sidebars, board group_by, epic tour, route fixes,
+ * Cosmic inject v40 — dual sidebars, board group_by, epic tour, route fixes,
  * CSS modulepreload fix, faster first paint, CosmicBoosts blank-board recovery.
  * No service workers. No reloads (except one-shot blank-board recovery).
  *
@@ -7,13 +7,15 @@
  * - group_by type/parent_type → no CE columns (if (!groups) return null)
  * - group_by state before states-lite loads → same blank, intermittent
  * - CE sparse groups: headers with total_results, results:[] → zero cards in DOM
- * Coerce display filters to state; prefetch states-lite; intercept issues
- * responses and fill empty groups from a flat re-fetch when needed.
+ * - skipBootstrap sidecar flag (web store-context) must be false on self-host
+ * - XHR intercept must not stringify axios responseType=json bodies
+ * Coerce display filters to state; ensure layout=list; prefetch states-lite;
+ * intercept issues responses and fill empty groups from a flat re-fetch.
  */
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 39;
+  window.__cosmicInjectVersion = 40;
 
   // Kill any SW left from broken experiments
   try {
@@ -866,6 +868,19 @@
         }
         if (kind === "userprops") {
           coerceGroupByDeep(data);
+          // SPA blank board when displayFilters.layout is missing: page does
+          // if (!activeLayout) return null and never calls fetchIssues.
+          try {
+            if (!data.display_filters || typeof data.display_filters !== "object") {
+              data.display_filters = {};
+            }
+            var df = data.display_filters;
+            if (!df.layout) df.layout = "list";
+            if (df.group_by == null || df.group_by === "" || isBadGroupBy(df.group_by)) {
+              df.group_by = "state";
+            }
+            if (isBadGroupBy(df.sub_group_by)) df.sub_group_by = null;
+          } catch (_) {}
         }
         if (kind === "prefs") {
           ensureEpicExplored(data);
@@ -912,8 +927,11 @@
               var d = JSON.parse(x.responseText);
               d = patch(k, d);
               var t = JSON.stringify(d);
+              // Axios with responseType "json" reads xhr.response as an object.
+              // Returning a string for .response breaks filters load → blank board.
               try {
                 Object.defineProperty(x, "responseText", {
+                  configurable: true,
                   get: function () {
                     return t;
                   },
@@ -921,7 +939,11 @@
               } catch (_) {}
               try {
                 Object.defineProperty(x, "response", {
+                  configurable: true,
                   get: function () {
+                    try {
+                      if (x.responseType === "json") return d;
+                    } catch (_) {}
                     return t;
                   },
                 });
