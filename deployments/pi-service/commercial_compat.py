@@ -316,6 +316,52 @@ _COMMERCIAL_ONLY_ISSUE_PARAMS = frozenset(
 )
 
 
+def sanitize_issue_filters(raw: Any) -> Optional[str]:
+    """Normalize commercial SPA `filters` for CE ComplexFilterBackend.
+
+    The Business SPA often sends empty arrays while clearing filter chips, e.g.
+    ``{"state":[]}`` or ``{"priority":[],"labels":[]}``. CE then returns 400
+    ``List value for 'X' must not be empty`` and the board paints blank even
+    though work items exist. Strip empty/null filter fields; drop filters
+    entirely when nothing remains.
+    """
+    if raw is None:
+        return None
+    parsed: Any = raw
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="ignore")
+    if isinstance(raw, str):
+        s = raw.strip()
+        if s in ("", "{}", "null", "None", "[]"):
+            return None
+        try:
+            parsed = json.loads(s)
+        except Exception:
+            # Leave non-JSON filters alone (CE may accept legacy forms)
+            return s if s else None
+    if not isinstance(parsed, dict):
+        return None
+    cleaned: Dict[str, Any] = {}
+    for fk, fv in parsed.items():
+        if fv is None:
+            continue
+        if isinstance(fv, (list, tuple, set)):
+            items = [x for x in fv if x is not None and x != ""]
+            if not items:
+                # empty array → omit field (CE 400s on empty list filters)
+                continue
+            cleaned[fk] = list(items)
+            continue
+        if isinstance(fv, str) and fv.strip() == "":
+            continue
+        if isinstance(fv, dict) and not fv:
+            continue
+        cleaned[fk] = fv
+    if not cleaned:
+        return None
+    return json.dumps(cleaned, separators=(",", ":"))
+
+
 def clean_ce_issue_params(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Strip commercial-only query keys and map group_by/sub_group_by for CE."""
     if not raw:
@@ -326,12 +372,13 @@ def clean_ce_issue_params(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             continue
         if v is None:
             continue
-        # Drop empty JSON filters object — CE ComplexFilterBackend treats {} as no-op,
-        # but some CE versions validate structure aggressively.
+        # Sanitize filters — empty arrays blank the board via CE 400s
         if k == "filters":
-            s = str(v).strip()
-            if s in ("", "{}", "null", "None"):
+            cleaned = sanitize_issue_filters(v)
+            if cleaned is None:
                 continue
+            out[k] = cleaned
+            continue
         out[k] = v
 
     for key in ("group_by", "sub_group_by"):

@@ -8,6 +8,7 @@ mirror needs to leave "Workspace not found".
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Tuple
 from unittest.mock import AsyncMock, patch
 
@@ -197,6 +198,7 @@ def test_clean_and_normalize_issue_helpers():
     from commercial_compat import (
         clean_ce_issue_params,
         normalize_issues_list_response,
+        sanitize_issue_filters,
         total_count_from_issues_body,
     )
 
@@ -212,6 +214,29 @@ def test_clean_and_normalize_issue_helpers():
     )
     assert q["group_by"] == "state_id"
     assert "layout" not in q and "sidecar" not in q and "filters" not in q
+
+    # Empty filter arrays (SPA clear-filter race) must not reach CE
+    assert sanitize_issue_filters('{"state":[]}') is None
+    assert sanitize_issue_filters({"priority": [], "labels": []}) is None
+    kept = sanitize_issue_filters('{"state":[],"priority":["high","none"]}')
+    assert kept is not None
+    assert json.loads(kept) == {"priority": ["high", "none"]}
+
+    q2 = clean_ce_issue_params(
+        {
+            "group_by": "state",
+            "filters": '{"state":[],"assignees":[]}',
+            "layout": "list",
+        }
+    )
+    assert "filters" not in q2
+    assert q2["group_by"] == "state_id"
+
+    q3 = clean_ce_issue_params(
+        {"filters": '{"state":[],"priority":["urgent"]}', "group_by": "priority"}
+    )
+    assert json.loads(q3["filters"]) == {"priority": ["urgent"]}
+    assert q3["group_by"] == "priority"
 
     body = {
         "results": {
@@ -270,6 +295,43 @@ def test_project_issues_list_normalizes_grouped_response():
     assert data["total_count"] == 1
     assert "referenced_resources" in data
     assert data["results"]["state-1"]["results"][0]["id"] == "issue-1"
+
+
+def test_project_issues_list_strips_empty_filter_arrays():
+    """SPA clear-filter races send filters={"state":[]} which CE 400s — board blanks."""
+    app = make_app()
+    seen: Dict[str, Any] = {}
+
+    async def mock_ce(path, request, params=None):
+        if path.endswith("/issues/") and "total-count" not in path:
+            seen["params"] = dict(params or {})
+            return (
+                200,
+                {
+                    "results": [{"id": "issue-1", "name": "A", "state_id": "s1"}],
+                    "total_count": 1,
+                    "total_results": 1,
+                },
+                {},
+            )
+        if path.endswith("/modules/"):
+            return 200, [], {}
+        return 404, {"error": "not mocked"}, {}
+
+    with patch("commercial_compat.ce_get", new=AsyncMock(side_effect=mock_ce)):
+        c = TestClient(app)
+        r = c.get(
+            "/api/workspaces/cosmicboosts/projects/proj1/issues/",
+            params={
+                "group_by": "state",
+                "layout": "list",
+                "filters": json.dumps({"state": [], "priority": [], "labels": []}),
+            },
+        )
+    assert r.status_code == 200
+    assert r.json()["total_count"] == 1
+    assert "filters" not in seen["params"]
+    assert seen["params"].get("group_by") == "state_id"
 
 
 def test_user_work_items_total_count_aliases_user_issues():
