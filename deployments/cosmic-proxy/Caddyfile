@@ -23,6 +23,16 @@
 		}
 		reverse_proxy pi:8080
 	}
+	# Critical SPA AI/Wiki gate bundles — must not stick on CF for 4h after fixes
+	@ai_gate_assets path_regexp ^/assets/(detail-DFXDSk4X|layout-CR1P7wEo|store-context-BZelk5Qy|use-ai-flag-CyOtmqWk|entry\.client-DHb__A1L|toast-etX1DRQn)\.js$
+	handle @ai_gate_assets {
+		header {
+			Cache-Control "no-cache, no-store, must-revalidate"
+			Pragma "no-cache"
+			CDN-Cache-Control "no-store"
+		}
+		reverse_proxy web:3000
+	}
 	reverse_proxy /cosmic-pilot/* pi:8080
 	reverse_proxy /cosmic-pilot-inject.js pi:8080
 	# Patched English i18n (ICU plurals expanded) — override SPA asset.
