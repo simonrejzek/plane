@@ -1129,12 +1129,133 @@ def project_role_relation(member_role: Any) -> str:
     try:
         r = int(member_role)
     except Exception:
+        # commercial SPA may send role_slug
+        s = str(member_role or "").lower()
+        if s in ("admin", "owner"):
+            return "admin"
+        if s in ("member",):
+            return "member"
+        if s in ("guest",):
+            return "guest"
         r = 15
     if r >= 20:
         return "admin"
     if r >= 15:
         return "member"
     return "guest"
+
+
+# CE ProjectMember.ROLE_CHOICES: 20 Admin, 15 Member, 5 Guest
+ROLE_SLUG_TO_CE: Dict[str, int] = {
+    "owner": 20,
+    "admin": 20,
+    "member": 15,
+    "guest": 5,
+}
+CE_ROLE_TO_SLUG: Dict[int, str] = {20: "admin", 15: "member", 5: "guest"}
+
+
+def ce_role_from_payload(data: Any) -> Optional[int]:
+    """Extract CE numeric role from SPA {role} or {role_slug} body."""
+    if not isinstance(data, dict):
+        return None
+    if "role" in data and data["role"] is not None:
+        try:
+            return int(data["role"])
+        except Exception:
+            s = str(data["role"]).lower()
+            if s in ROLE_SLUG_TO_CE:
+                return ROLE_SLUG_TO_CE[s]
+    slug = data.get("role_slug")
+    if slug is not None:
+        return ROLE_SLUG_TO_CE.get(str(slug).lower())
+    return None
+
+
+def _default_project_roles() -> List[Dict[str, Any]]:
+    """Synthetic project-namespace roles for commercial SPA role pickers.
+
+    SPA calls GET /roles/?namespace=project then stores by slug (guest/member/admin).
+    Without these, project member invite/role dropdowns stay empty.
+    """
+    base_ts = "2026-07-27T22:18:39.688532Z"
+    return [
+        {
+            "id": "proj-role-admin-0001",
+            "name": "Admin",
+            "slug": "admin",
+            "description": "Project admin — full project settings and member management",
+            "namespace": "project",
+            "permissions": {"*": True},
+            "permission_schemes": [
+                {
+                    "id": "proj-scheme-admin-0001",
+                    "name": "Project Admin",
+                    "slug": "admin",
+                    "namespace": "project",
+                    "is_system": True,
+                }
+            ],
+            "based_on": None,
+            "level": 20,
+            "is_system": True,
+            "sort_order": 100,
+            "member_count": 0,
+            "status": "active",
+            "created_at": base_ts,
+            "updated_at": base_ts,
+        },
+        {
+            "id": "proj-role-member-0001",
+            "name": "Member",
+            "slug": "member",
+            "description": "Project member — create and edit work items",
+            "namespace": "project",
+            "permissions": {"workitem:*": True, "project:view": True},
+            "permission_schemes": [
+                {
+                    "id": "proj-scheme-member-0001",
+                    "name": "Project Member",
+                    "slug": "member",
+                    "namespace": "project",
+                    "is_system": True,
+                }
+            ],
+            "based_on": None,
+            "level": 15,
+            "is_system": True,
+            "sort_order": 200,
+            "member_count": 0,
+            "status": "active",
+            "created_at": base_ts,
+            "updated_at": base_ts,
+        },
+        {
+            "id": "proj-role-guest-0001",
+            "name": "Guest",
+            "slug": "guest",
+            "description": "Project guest — limited view access",
+            "namespace": "project",
+            "permissions": {"workitem:view": True, "project:view": True},
+            "permission_schemes": [
+                {
+                    "id": "proj-scheme-guest-0001",
+                    "name": "Project Guest",
+                    "slug": "guest",
+                    "namespace": "project",
+                    "is_system": True,
+                }
+            ],
+            "based_on": None,
+            "level": 5,
+            "is_system": True,
+            "sort_order": 300,
+            "member_count": 0,
+            "status": "active",
+            "created_at": base_ts,
+            "updated_at": base_ts,
+        },
+    ]
 
 
 def to_project_lite(p: Dict[str, Any]) -> Dict[str, Any]:
@@ -1417,6 +1538,10 @@ def register_commercial_compat(app: FastAPI) -> None:
         if err_status is not None:
             return JSONResponse(err_body or {"error": "Workspace not found"}, status_code=err_status)
         roles = list(WORKSPACE_ROLES or [])
+        # Commercial SPA loads project roles for member settings / invite modal.
+        # CE only has numeric ROLE_CHOICES (20 Admin / 15 Member / 5 Guest).
+        if not any(r.get("namespace") == "project" for r in roles):
+            roles = list(roles) + _default_project_roles()
         if namespace:
             roles = [r for r in roles if r.get("namespace") == namespace]
         return roles
@@ -2054,6 +2179,209 @@ def register_commercial_compat(app: FastAPI) -> None:
 
             lite = [m for m in lite if search in _blob(m)]
         return as_page(lite)
+
+    def _ce_int_role(val: Any) -> int:
+        try:
+            return int(val)
+        except Exception:
+            return ROLE_SLUG_TO_CE.get(str(val or "").lower(), 5)
+
+    def _spa_project_member_row(
+        row: Dict[str, Any], users: Dict[str, Dict[str, Any]], ws_id: Any = None
+    ) -> Dict[str, Any]:
+        """CE list often returns member as UUID; SPA needs nested user + role_slug."""
+        mid = row.get("member")
+        user_id = None
+        user_obj: Dict[str, Any] = {}
+        if isinstance(mid, dict):
+            user_id = str(mid.get("id") or "")
+            user_obj = mid
+        elif mid is not None:
+            user_id = str(mid)
+        role_i = _ce_int_role(row.get("role") if row.get("role") is not None else 5)
+        slug = CE_ROLE_TO_SLUG.get(role_i, project_role_relation(role_i))
+        member_lite: Dict[str, Any] = {
+            "id": user_id,
+            "display_name": "",
+            "first_name": "",
+            "last_name": "",
+            "avatar": "",
+            "avatar_url": None,
+            "is_bot": False,
+            "email": "",
+            "last_login_medium": "email",
+        }
+        if user_id:
+            profile = {**users.get(user_id, {}), **user_obj, "id": user_id}
+            member_lite = _member_lite_from_user(
+                profile,
+                workspace_id=ws_id,
+                role=role_i,
+                membership_id=row.get("id"),
+                is_active=row.get("is_active", True),
+            )
+        out = dict(row)
+        out["member"] = member_lite
+        out["role"] = role_i
+        out["role_slug"] = slug
+        out["original_role"] = row.get("original_role", role_i)
+        out["is_active"] = True if row.get("is_active") is None else bool(row.get("is_active"))
+        return out
+
+    def _map_members_payload_for_ce(body: Any) -> Any:
+        """SPA sends members:[{member_id, role_slug}]; CE wants role as int."""
+        if not isinstance(body, dict):
+            return body
+        out = dict(body)
+        members = out.get("members")
+        if isinstance(members, list):
+            mapped = []
+            for m in members:
+                if not isinstance(m, dict):
+                    mapped.append(m)
+                    continue
+                row = dict(m)
+                ce_role = ce_role_from_payload(row)
+                if ce_role is not None:
+                    row["role"] = ce_role
+                row.pop("role_slug", None)
+                # accept either member_id or member
+                if not row.get("member_id") and row.get("member"):
+                    mem = row["member"]
+                    row["member_id"] = mem.get("id") if isinstance(mem, dict) else mem
+                mapped.append(row)
+            out["members"] = mapped
+        else:
+            ce_role = ce_role_from_payload(out)
+            if ce_role is not None:
+                out["role"] = ce_role
+            out.pop("role_slug", None)
+        return out
+
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/members/")
+    @app.get("/api/workspaces/{slug}/projects/{project_id}/members")
+    async def project_members_list(slug: str, project_id: str, request: Request):
+        """Expand CE project members for commercial SPA (nested member + role_slug)."""
+        status, body, _ = await ce_get(
+            f"/api/workspaces/{slug}/projects/{project_id}/members/",
+            request,
+            params=dict(request.query_params) or None,
+        )
+        if status != 200:
+            return JSONResponse(
+                body if isinstance(body, (dict, list)) else {"error": str(body)},
+                status_code=status,
+            )
+        users = await _workspace_user_map(slug, request)
+        ws_id = None
+        st_ws, ws_body, _ = await ce_get(f"/api/workspaces/{slug}/", request)
+        if st_ws == 200 and isinstance(ws_body, dict):
+            ws_id = ws_body.get("id")
+
+        def _map_list(rows: List[Any]) -> List[Dict[str, Any]]:
+            out: List[Dict[str, Any]] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    out.append(_spa_project_member_row(row, users, ws_id))
+            return out
+
+        if isinstance(body, list):
+            return _map_list(body)
+        if isinstance(body, dict):
+            out = dict(body)
+            results = out.get("results")
+            if isinstance(results, list):
+                out["results"] = _map_list(results)
+            return out
+        return body
+
+    @app.post("/api/workspaces/{slug}/projects/{project_id}/members/")
+    @app.post("/api/workspaces/{slug}/projects/{project_id}/members")
+    async def project_members_create(slug: str, project_id: str, request: Request):
+        """Map SPA role_slug → CE numeric role on bulk add."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        mapped = _map_members_payload_for_ce(body)
+        status, resp, _ = await ce_request(
+            "POST",
+            f"/api/workspaces/{slug}/projects/{project_id}/members/",
+            request,
+            json_body=mapped,
+        )
+        if status not in (200, 201):
+            return JSONResponse(
+                resp if isinstance(resp, (dict, list)) else {"error": str(resp)},
+                status_code=status,
+            )
+        users = await _workspace_user_map(slug, request)
+        ws_id = None
+        st_ws, ws_body, _ = await ce_get(f"/api/workspaces/{slug}/", request)
+        if st_ws == 200 and isinstance(ws_body, dict):
+            ws_id = ws_body.get("id")
+        # CE may return list of created ProjectMembers
+        if isinstance(resp, list):
+            mapped_rows = [_spa_project_member_row(r, users, ws_id) for r in resp if isinstance(r, dict)]
+            # SPA expects member as user id string in bulk response map
+            for r in mapped_rows:
+                mid = r.get("member")
+                if isinstance(mid, dict) and mid.get("id"):
+                    r["member"] = mid["id"]
+            return mapped_rows
+        if isinstance(resp, dict):
+            return _spa_project_member_row(resp, users, ws_id)
+        return resp
+
+    @app.patch("/api/workspaces/{slug}/projects/{project_id}/members/{member_id}/")
+    @app.patch("/api/workspaces/{slug}/projects/{project_id}/members/{member_id}")
+    async def project_members_update(
+        slug: str, project_id: str, member_id: str, request: Request
+    ):
+        """Map SPA {role_slug} → CE {role: int} on role change."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        mapped = _map_members_payload_for_ce(body)
+        status, resp, _ = await ce_request(
+            "PATCH",
+            f"/api/workspaces/{slug}/projects/{project_id}/members/{member_id}/",
+            request,
+            json_body=mapped,
+        )
+        if status not in (200, 201):
+            return JSONResponse(
+                resp if isinstance(resp, (dict, list)) else {"error": str(resp)},
+                status_code=status,
+            )
+        users = await _workspace_user_map(slug, request)
+        if isinstance(resp, dict):
+            row = _spa_project_member_row(resp, users)
+            return row
+        return resp
+
+    @app.patch("/api/workspaces/{slug}/members/{member_id}/")
+    @app.patch("/api/workspaces/{slug}/members/{member_id}")
+    async def workspace_members_update(slug: str, member_id: str, request: Request):
+        """Allow SPA role_slug on workspace member role changes."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        mapped = _map_members_payload_for_ce(body)
+        status, resp, _ = await ce_request(
+            "PATCH",
+            f"/api/workspaces/{slug}/members/{member_id}/",
+            request,
+            json_body=mapped,
+        )
+        if status not in (200, 201):
+            return JSONResponse(
+                resp if isinstance(resp, (dict, list)) else {"error": str(resp)},
+                status_code=status,
+            )
+        return resp
 
     @app.post("/auth/mobile/email-check/")
     @app.post("/auth/mobile/email-check")

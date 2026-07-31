@@ -110,6 +110,21 @@
 	@proj_members_lite path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/members-lite/?$
 	reverse_proxy @proj_members_lite pi:8080
 
+	# Project members list/add/role — SPA needs nested member + role_slug
+	# (CE returns member UUID + numeric role only). Map role_slug ↔ CE int.
+	@proj_members_list path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/members/?$
+	reverse_proxy @proj_members_list pi:8080
+
+	@proj_members_one path_regexp ^/api/workspaces/[^/]+/projects/[^/]+/members/[^/]+/?$
+	reverse_proxy @proj_members_one pi:8080
+
+	# Workspace member role changes may send role_slug from commercial SPA
+	@ws_members_one {
+		method PATCH
+		path_regexp ^/api/workspaces/[^/]+/members/[^/]+/?$
+	}
+	reverse_proxy @ws_members_one pi:8080
+
 	# Version spoof for mobile app + commercial 3.0 feature gates
 	@instances_spoof path /api/instances/ /api/instances
 	reverse_proxy @instances_spoof pi:8080
