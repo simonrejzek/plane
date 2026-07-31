@@ -910,7 +910,7 @@ def regroup_issues_by_ce_field(
         issue = _normalize_issue_item(raw)
         for gk in _issue_group_keys(issue, group_by):
             buckets.setdefault(gk, []).append(issue)
-    results = {}
+    results: Dict[str, Any] = {}
     for gk, iss in buckets.items():
         results[gk] = {"results": iss, "total_results": len(iss)}
         for it in iss:
@@ -934,6 +934,45 @@ def regroup_issues_by_ce_field(
         "total_groups": len(results),
         "next_group_offset": None,
     }
+
+
+def order_state_group_results(
+    results: Dict[str, Any],
+    states: List[Dict[str, Any]],
+    *,
+    include_empty: bool = True,
+) -> Dict[str, Any]:
+    """Order state_id buckets by project state sequence; optionally include empty columns.
+
+    Kanban columns follow Object.keys(groupedIssueIds). Without this, order is
+    first-seen issue order (Backlog, In Progress, Todo…) and empty statuses
+    like Cancelled/Done never appear as columns.
+    """
+    if not isinstance(results, dict):
+        return results
+    ordered: Dict[str, Any] = {}
+    seen: set = set()
+    # Stable sort: sequence, then name
+    def _seq(s: Dict[str, Any]) -> float:
+        try:
+            return float(s.get("sequence") if s.get("sequence") is not None else 1e12)
+        except Exception:
+            return 1e12
+
+    for st in sorted(
+        [s for s in states if isinstance(s, dict) and s.get("id")],
+        key=lambda s: (_seq(s), str(s.get("name") or "")),
+    ):
+        sid = str(st["id"])
+        seen.add(sid)
+        if sid in results:
+            ordered[sid] = results[sid]
+        elif include_empty:
+            ordered[sid] = {"results": [], "total_results": 0}
+    for k, v in results.items():
+        if str(k) not in seen:
+            ordered[str(k)] = v
+    return ordered
 
 
 def grouped_response_has_empty_cards(body: Any) -> bool:
@@ -1632,6 +1671,30 @@ def register_commercial_compat(app: FastAPI) -> None:
                 )
                 out = normalize_issues_list_response(out)
 
+            # State columns: order by sequence + keep empty statuses (Done/Cancelled)
+            gb = str(group_by or "")
+            if gb in ("state_id", "state") and isinstance(out.get("results"), dict) and not sub_group_by:
+                try:
+                    st, states_body, _ = await ce_get(
+                        f"/api/workspaces/{slug}/projects/{project_id}/states/",
+                        request,
+                    )
+                    states_rows: List[Dict[str, Any]] = []
+                    if st == 200:
+                        if isinstance(states_body, list):
+                            states_rows = [x for x in states_body if isinstance(x, dict)]
+                        elif isinstance(states_body, dict):
+                            maybe = states_body.get("results") or []
+                            if isinstance(maybe, list):
+                                states_rows = [x for x in maybe if isinstance(x, dict)]
+                    if states_rows:
+                        out["results"] = order_state_group_results(
+                            out["results"], states_rows, include_empty=True
+                        )
+                        out["total_groups"] = len(out["results"])
+                except Exception:
+                    pass
+
         # Enrich module names so board cards don't flash UUIDs
         try:
             mod_map = await _module_name_map(slug, project_id, request)
@@ -1874,6 +1937,7 @@ def register_commercial_compat(app: FastAPI) -> None:
         if st_ws == 200 and isinstance(ws_body, dict):
             ws_id = ws_body.get("id")
 
+        # SPA does results.map(e => e.member) — must nest lite under `.member`.
         lite: List[Dict[str, Any]] = []
         for row in rows_in:
             mid = row.get("member")
@@ -1887,25 +1951,41 @@ def register_commercial_compat(app: FastAPI) -> None:
             if not user_id:
                 continue
             profile = {**users.get(user_id, {}), **user_obj, "id": user_id}
+            member_lite = _member_lite_from_user(
+                profile,
+                workspace_id=ws_id,
+                role=row.get("role"),
+                membership_id=row.get("id"),
+                is_active=row.get("is_active", True),
+            )
+            # filter=assignable (default SPA scope): hide bots
+            filt = (request.query_params.get("filter") or "assignable").lower()
+            if filt in ("assignable", "mentionable") and member_lite.get("is_bot"):
+                continue
             lite.append(
-                _member_lite_from_user(
-                    profile,
-                    workspace_id=ws_id,
-                    role=row.get("role"),
-                    membership_id=row.get("id"),
-                    is_active=row.get("is_active", True),
-                )
+                {
+                    "id": row.get("id") or user_id,
+                    "role": row.get("role"),
+                    "role_slug": member_lite.get("role_slug"),
+                    "member": member_lite,
+                    "is_active": member_lite.get("is_active", True),
+                    "joined_at": row.get("created_at") or row.get("joined_at"),
+                }
             )
 
-        # search filter (optional)
+        def _member_search_blob(row: Dict[str, Any]) -> str:
+            m = row.get("member") if isinstance(row.get("member"), dict) else row
+            parts = [
+                m.get("display_name") or "",
+                m.get("first_name") or "",
+                m.get("last_name") or "",
+                m.get("email") or "",
+            ]
+            return " ".join(parts).lower()
+
         search = (request.query_params.get("search") or "").strip().lower()
         if search:
-            lite = [
-                m
-                for m in lite
-                if search in (m.get("display_name") or "").lower()
-                or search in (m.get("email") or "").lower()
-            ]
+            lite = [m for m in lite if search in _member_search_blob(m)]
         return as_page(lite)
 
     @app.get("/api/workspaces/{slug}/members-lite/")
@@ -1930,19 +2010,49 @@ def register_commercial_compat(app: FastAPI) -> None:
             member = row.get("member")
             if not isinstance(member, dict):
                 continue
+            member_lite = _member_lite_from_user(
+                member,
+                workspace_id=ws_id,
+                role=row.get("role"),
+                membership_id=row.get("id"),
+                is_active=row.get("is_active", True),
+            )
+            filt = (request.query_params.get("filter") or "assignable").lower()
+            if filt in ("assignable", "mentionable") and member_lite.get("is_bot"):
+                continue
             lite.append(
-                _member_lite_from_user(
-                    member,
-                    workspace_id=ws_id,
-                    role=row.get("role"),
-                    membership_id=row.get("id"),
-                    is_active=row.get("is_active", True),
-                )
+                {
+                    "id": row.get("id") or member_lite.get("id"),
+                    "role": row.get("role"),
+                    "role_slug": member_lite.get("role_slug"),
+                    "member": member_lite,
+                    "is_active": member_lite.get("is_active", True),
+                    "joined_at": row.get("created_at") or row.get("joined_at"),
+                }
             )
         raw_ids = request.query_params.get("ids") or ""
         wanted = {x.strip() for x in raw_ids.split(",") if x.strip()}
         if wanted:
-            return [m for m in lite if str(m.get("id")) in wanted]
+            return [
+                m
+                for m in lite
+                if str(m.get("id")) in wanted
+                or str((m.get("member") or {}).get("id")) in wanted
+            ]
+        search = (request.query_params.get("search") or "").strip().lower()
+        if search:
+            def _blob(row: Dict[str, Any]) -> str:
+                m = row.get("member") if isinstance(row.get("member"), dict) else {}
+                return " ".join(
+                    [
+                        m.get("display_name") or "",
+                        m.get("first_name") or "",
+                        m.get("last_name") or "",
+                        m.get("email") or "",
+                    ]
+                ).lower()
+
+            lite = [m for m in lite if search in _blob(m)]
         return as_page(lite)
 
     @app.post("/auth/mobile/email-check/")

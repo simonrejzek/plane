@@ -366,6 +366,30 @@ def test_regroup_issues_fills_empty_group_cards():
     assert len(nested_sg["results"]["s2"]["results"]["u2"]["results"]) == 1
     assert nested_sg["total_count"] == 3
 
+    # State column order + empty columns (Todo before In Progress; Cancelled shown)
+    from commercial_compat import order_state_group_results
+
+    messy = regroup_issues_by_ce_field(
+        [
+            {"id": "a", "state_id": "backlog"},
+            {"id": "b", "state_id": "started"},  # In Progress first-seen before Todo
+            {"id": "c", "state_id": "todo"},
+        ],
+        "state_id",
+    )["results"]
+    states = [
+        {"id": "backlog", "name": "Backlog", "sequence": 15000},
+        {"id": "todo", "name": "Todo", "sequence": 25000},
+        {"id": "started", "name": "In Progress", "sequence": 35000},
+        {"id": "done", "name": "Done", "sequence": 45000},
+        {"id": "cancelled", "name": "Cancelled", "sequence": 55000},
+    ]
+    ordered = order_state_group_results(messy, states, include_empty=True)
+    assert list(ordered.keys()) == ["backlog", "todo", "started", "done", "cancelled"]
+    assert ordered["done"]["results"] == []
+    assert ordered["cancelled"]["total_results"] == 0
+    assert len(ordered["backlog"]["results"]) == 1
+
 
 def test_normalize_projects_list_wraps_ce_array():
     from commercial_compat import normalize_projects_list_response

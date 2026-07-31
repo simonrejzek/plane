@@ -1,7 +1,8 @@
 /**
- * Cosmic inject v44 — dual sidebars, board group_by, epic tour, route fixes,
+ * Cosmic inject v45 — dual sidebars, board group_by, epic tour, route fixes,
  * CSS modulepreload fix; always drop sub_group_by so /issues/ matches modules.
  * No service workers. No reloads (except one-shot blank-board recovery).
+ * v45: stop board thrash (no storage-event nudge; better card detect).
  *
  * Board blank with "Work items N" / "Simon · 21" but empty body:
  * - group_by type/parent_type → no CE columns (if (!groups) return null)
@@ -17,7 +18,7 @@
 (function () {
   if (window.__cosmicShellInjected) return;
   window.__cosmicShellInjected = true;
-  window.__cosmicInjectVersion = 44;
+  window.__cosmicInjectVersion = 45;
 
   // Kill any SW left from broken experiments
   try {
@@ -243,12 +244,11 @@
             })
             .filter(Boolean);
           if (ids.length) {
+            // Sort is not applied here; PI issues response orders state columns.
+            // Do NOT dispatch storage events — that re-triggers fetchIssues and
+            // makes the board flash/reload cards several times on open.
             window.__cosmicStateIdsByProject[projectId] = ids;
             window.__cosmicRouterProjectId = projectId;
-            // Nudge React: toggle a storage event many boards subscribe to
-            try {
-              window.dispatchEvent(new Event("local-storage:issue_local_filters"));
-            } catch (_) {}
           }
         })
         .catch(function () {});
@@ -760,15 +760,20 @@
       if (!hasBoardChrome) return;
       var countMatch = text.match(/Work items?\s+(\d+)/i);
       var count = countMatch ? parseInt(countMatch[1], 10) : -1;
-      // issue rows / kanban cards / sequence ids
+      // issue rows / kanban cards / sequence ids (COSMICBOOS-23 etc.)
       var rows =
         document.querySelectorAll(
-          '[id^="issue-"], a[href*="/issues/"][href*="-"], .group\\/kanban-block'
+          '[id^="issue-"], a[href*="/issues/"][href*="-"], .group\\/kanban-block, a.block.rounded-lg.border'
         ).length || 0;
-      if (rows < 1 && /[A-Z]{2,5}-\d+/.test(text)) rows = 1;
+      if (rows < 1 && /[A-Z]{2,12}-\s*\d+/.test(text)) rows = 1;
+      if (rows < 1 && /Backlog\s+\d+|In Progress\s+\d+|Todo\s+\d+/i.test(text) && /COSMIC|Work items?\s+[1-9]/i.test(text))
+        rows = 1;
       if (rows >= 1) return;
       // If badge is explicitly 0, board is legitimately empty
       if (count === 0) return;
+      // Cards already loaded (title text visible) — never full-page reload
+      if (/Přidat|COSMICBOOS|popisky|Plane AI/i.test(text) && /Backlog|Todo|In Progress/i.test(text))
+        return;
       sessionStorage.setItem("cosmic_blank_board_reloaded", "1");
       coerceIssueLocalFiltersStorage();
       var slug = workspaceSlugFromPath();
